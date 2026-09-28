@@ -1,5 +1,8 @@
 local claims = Shops.Claims.new()
-local counters = {}   -- id -> { netId, state, until, salt, reaction }
+
+-- Ownership lives in `claims`, not here: this record only tracks a
+-- claimed counter's clerk state (netId/state/timers) once claimed.
+local counters = {}   -- id -> { netId, state, until_, salt, reaction, claimedAt }
 
 local function counterRecord(id)
     counters[id] = counters[id] or { state = 'idle', salt = 0 }
@@ -20,7 +23,13 @@ lib.callback.register('dps-shops:server:claim', function(src, id)
     local rec = counterRecord(id)
     if rec.state == 'dead' and rec.until_ and os.time() < rec.until_ then return false end
     if rec.state == 'dead' then rec.state = 'idle'; rec.salt = rec.salt + 1 end
+    local owner = claims:ownerOf(id)
+    if owner and not rec.netId and rec.claimedAt and os.time() - rec.claimedAt > 15 then
+        claims:release(id, owner)
+        rec.claimedAt = nil
+    end
     if not claims:claim(id, src) then return false end
+    rec.claimedAt = os.time()
     local persona = Shops.persona(counter, Config)
     return true, Shops.pedFor(persona, id, rec.salt), rec.salt
 end)
@@ -28,9 +37,22 @@ end)
 lib.callback.register('dps-shops:server:registered', function(src, id, netId)
     if claims:ownerOf(id) ~= src then return false end
     local rec = counterRecord(id)
-    rec.netId = netId
+    if type(netId) ~= 'number' then
+        claims:release(id, src)
+        rec.claimedAt = nil
+        return false
+    end
+    local counter = Shops.counterById(Config, id)
     local ent = NetworkGetEntityFromNetworkId(netId)
-    if ent and ent ~= 0 then Entity(ent).state:set('dpsShop', id, true) end
+    local valid = counter and ent and ent ~= 0 and DoesEntityExist(ent) and GetEntityType(ent) == 1
+        and not IsPedAPlayer(ent) and #(GetEntityCoords(ent) - counter.coords) <= 5.0
+    if not valid then
+        claims:release(id, src)
+        rec.claimedAt = nil
+        return false
+    end
+    rec.netId = netId
+    Entity(ent).state:set('dpsShop', id, true)
     return true
 end)
 
@@ -38,6 +60,7 @@ lib.callback.register('dps-shops:server:release', function(src, id)
     if not claims:release(id, src) then return false end
     local rec = counterRecord(id)
     rec.netId = nil
+    rec.claimedAt = nil
     return true
 end)
 
@@ -45,18 +68,28 @@ AddEventHandler('playerDropped', function()
     local src = source
     for _, id in ipairs(claims:bySource(src)) do
         claims:release(id, src)
-        counterRecord(id).netId = nil
+        local rec = counterRecord(id)
+        rec.netId = nil
+        rec.claimedAt = nil
     end
 end)
 
 AddEventHandler('entityRemoved', function(entity)
-    if not DoesEntityExist(entity) then return end
-    local state = Entity(entity).state
-    local id = state and state.dpsShop
+    local ok, id = pcall(function() return Entity(entity).state.dpsShop end)
+    if not ok then id = nil end
+    if not id then
+        for cid, rec in pairs(counters) do
+            if rec.netId and NetworkGetEntityFromNetworkId(rec.netId) == entity then
+                id = cid
+                break
+            end
+        end
+    end
     if not id then return end
     local rec = counters[id]
     if rec and rec.netId and NetworkGetEntityFromNetworkId(rec.netId) == entity then
         rec.netId = nil
+        rec.claimedAt = nil
         local owner = claims:ownerOf(id)
         if owner then claims:release(id, owner) end
     end
@@ -67,6 +100,7 @@ function MarkDead(id)
     rec.state = 'dead'
     rec.until_ = os.time() + Config.RespawnSeconds
     rec.netId = nil
+    rec.claimedAt = nil
     local owner = claims:ownerOf(id)
     if owner then claims:release(id, owner) end
     TriggerClientEvent('dps-shops:client:counterState', -1, id, 'dead')
