@@ -4,6 +4,9 @@ local claims = Shops.Claims.new()
 -- claimed counter's clerk state (netId/state/timers) once claimed.
 local counters = {}   -- id -> { netId, state, until_, salt, reaction, claimedAt }
 
+-- src -> os.time() of the last ACCEPTED threat call, the per-source rate limit.
+local threatLast = {}
+
 local function counterRecord(id)
     counters[id] = counters[id] or { state = 'idle', salt = 0 }
     return counters[id]
@@ -56,6 +59,16 @@ lib.callback.register('dps-shops:server:registered', function(src, id, netId)
     end
     rec.netId = netId
     Entity(ent).state:set('dpsShop', id, true)
+    -- A counter that was robbed stays jumpy across respawns: hand the fresh
+    -- clerk the aftermath flag, or retire the window if it has run out.
+    if rec.state == 'aftermath' then
+        if rec.until_ and os.time() < rec.until_ then
+            Entity(ent).state:set('aftermath', true, true)
+        else
+            rec.state = 'idle'
+            rec.until_ = nil
+        end
+    end
     return true
 end)
 
@@ -82,6 +95,7 @@ end
 AddEventHandler('playerDropped', function()
     local src = source
     releaseAllFor(src)
+    threatLast[src] = nil
 end)
 
 RegisterNetEvent('dps-shops:server:releaseAll', function()
@@ -120,6 +134,104 @@ function MarkDead(id)
     if owner then claims:release(id, owner) end
     TriggerClientEvent('dps-shops:client:counterState', -1, id, 'dead')
 end
+
+-- ---------------------------------------------------------------------------
+-- Threats, reactions, the silent alarm, the aftermath window and clerk death.
+-- The reaction is rolled here, once per counter per incident, and replicated
+-- through the ped's statebag so every client sees the same one.
+-- ---------------------------------------------------------------------------
+
+local ReactionSeconds = 120   -- how long a clerk stays out of position
+local ThreatRateSeconds = 5   -- at most one accepted threat call per source
+
+local function entityOf(rec)
+    if not rec or not rec.netId then return nil end
+    local ent = NetworkGetEntityFromNetworkId(rec.netId)
+    if not ent or ent == 0 or not DoesEntityExist(ent) then return nil end
+    return ent
+end
+
+-- Fires for BOTH reaction kinds: a clerk who decides to fight still slaps the
+-- silent alarm on the way. wasabi_mdt is the only dispatch on this server.
+local function alarm(counter)
+    if GetResourceState('wasabi_mdt') ~= 'started' then return end
+    local ok, err = pcall(function()
+        exports.wasabi_mdt:CreateDispatch({
+            type = 'robbery',
+            code = '10-31',
+            title = 'Silent alarm: ' .. counter.label,
+            description = 'The clerk hit the alarm. Robbery in progress.',
+            location = counter.label,
+            coords = { x = counter.coords.x + 0.0, y = counter.coords.y + 0.0, z = counter.coords.z + 0.0 },
+            priority = 1,
+            departments = Shops.alarmDepartments(Shops.regionOf(counter), Config),
+            metadata = { caller_name = counter.label, weapons_involved = true, injuries_reported = false, suspects = 1 },
+        })
+    end)
+    if not ok then
+        lib.print.error(('dps-shops: alarm for %s failed: %s'):format(counter.id, tostring(err)))
+    end
+end
+
+-- End of the reaction window: the clerk goes back to work, the counter keeps
+-- the aftermath flag so the next threat rolls with the bonus and nobody is
+-- greeted while it lasts.
+local function endReaction(id)
+    local rec = counters[id]
+    if not rec or rec.state ~= 'reacting' then return end
+    rec.state = 'aftermath'
+    rec.until_ = os.time() + Config.Aftermath.seconds
+    rec.reaction = nil
+    local ent = entityOf(rec)
+    if not ent then return end
+    Entity(ent).state:set('reaction', nil, true)
+    Entity(ent).state:set('aftermath', true, true)
+end
+
+lib.callback.register('dps-shops:server:threat', function(src, id, gun, robbers)
+    local counter = Shops.counterById(Config, id)
+    if not counter then return nil end
+    local now = os.time()
+    if Shops.throttled(threatLast[src], now, ThreatRateSeconds) then return nil end
+    if not nearCounter(src, counter, Config.ThreatDistance + 2.0) then return nil end
+    local rec = counterRecord(id)
+    local accepted, aftermath = Shops.threatAccepted(rec, now)
+    if not accepted then return nil end
+    local ent = entityOf(rec)
+    if not ent then return nil end
+
+    threatLast[src] = now
+    local persona = Shops.persona(counter, Config)
+    local kind = Shops.rollReaction(persona, {
+        hour = tonumber(os.date('%H')),
+        robbers = Shops.clampRobbers(robbers),
+        aftermath = aftermath,
+        gun = gun == true,
+    }, nil, Config)
+
+    rec.state = 'reacting'
+    rec.reaction = kind
+    rec.until_ = nil
+    Entity(ent).state:set('aftermath', nil, true)
+    Entity(ent).state:set('reaction', { kind = kind, at = now, by = src }, true)
+
+    SetTimeout(persona.alarmDelay or 4000, function() alarm(counter) end)
+    SetTimeout(ReactionSeconds * 1000, function() endReaction(id) end)
+    return kind
+end)
+
+-- Only the owning client reports its own clerk's death, and the server checks
+-- the body before it believes it: peds die at 100 on the 100-200 health scale.
+lib.callback.register('dps-shops:server:clerkDead', function(src, id)
+    if claims:ownerOf(id) ~= src then return false end
+    local rec = counters[id]
+    if not rec or not rec.netId then return false end
+    local ent = NetworkGetEntityFromNetworkId(rec.netId)
+    local gone = not ent or ent == 0 or not DoesEntityExist(ent)
+    if not gone and GetEntityHealth(ent) > 100 then return false end
+    MarkDead(id)
+    return true
+end)
 
 exports('GetCounterState', function(id)
     local rec = counters[id]

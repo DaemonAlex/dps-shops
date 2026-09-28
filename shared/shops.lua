@@ -65,6 +65,34 @@ function Shops.rollReaction(persona, ctx, rnd, cfg)
     return ((rnd or math.random)() < chance) and 'aggressive' or 'submissive'
 end
 
+-- A client's robber count is advisory; keep it inside the range the crowd bonus
+-- can actually use (one extra robber is +CrowdBonus, two or more is the cap).
+function Shops.clampRobbers(n)
+    n = math.floor(tonumber(n) or 1)
+    if n < 1 then return 1 end
+    if n > 4 then return 4 end
+    return n
+end
+
+-- May a threat be rolled for this counter record right now?
+-- Returns accepted, aftermath. A counter mid-reaction or dead refuses; a counter
+-- still inside its aftermath window accepts AND carries the aggressive bonus; an
+-- expired aftermath accepts as a plain first threat.
+function Shops.threatAccepted(rec, now)
+    if not rec then return false, false end
+    if rec.state == 'reacting' or rec.state == 'dead' then return false, false end
+    if rec.state == 'aftermath' then
+        return true, (rec.until_ ~= nil and now < rec.until_)
+    end
+    return true, false
+end
+
+-- Per-source rate limit: true when the call must be dropped.
+function Shops.throttled(last, now, window)
+    if not last then return false end
+    return (now - last) < (window or 5)
+end
+
 Shops.Claims = {}
 Shops.Claims.__index = Shops.Claims
 function Shops.Claims.new() return setmetatable({ owner = {} }, Shops.Claims) end

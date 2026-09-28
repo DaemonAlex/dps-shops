@@ -5,6 +5,8 @@ local greeted = {}       -- id -> true once greeted this visit (spawn-point visi
 local chatterToken = {}  -- id -> current chatter generation; a stale closure compares and dies quietly
 local spawning = {}      -- id -> true while spawnClerk is mid-flight (holds a granted claim)
 local cancelled = {}     -- id -> true when the player left before an in-flight spawn finished
+local inside = {}        -- id -> true while this player is inside the spawn point
+local retried = {}       -- id -> true once an unwound spawn has been retried this visit
 
 local function loadModel(model)
     local hash = joaat(model)
@@ -41,72 +43,112 @@ function Clerk.pedOf(id)
     return nil
 end
 
--- Undo an in-flight spawn that was cancelled (the player left the spawn point
--- before it finished): drop any ped already created, hand the claim back, and
--- clear both flight flags so a fresh spawn can start on the next onEnter.
+-- Where the clerk stands: the configured spot, nudged to solid ground only when
+-- ground turns up close to the configured z, so a slightly wrong SPOT z cannot
+-- leave the clerk floating or buried.
+local function counterZ(counter)
+    local found, groundZ = GetGroundZFor_3dCoord(counter.coords.x, counter.coords.y, counter.coords.z, false)
+    if found and math.abs(groundZ - counter.coords.z) <= 1.5 then return groundZ end
+    return counter.coords.z - 1.0
+end
+
+local spawnClerk   -- forward: an unwound spawn restarts itself through cancelSpawn
+
+-- One retry per spawn-point visit, and only while the player is still inside
+-- and the counter is still empty: an exit-then-re-enter during an in-flight
+-- spawn would otherwise leave the counter dark until the next boundary crossing.
+local function retrySpawn(counter)
+    if not inside[counter.id] then return end
+    if spawning[counter.id] then return end
+    if Clerk.pedOf(counter.id) then return end
+    spawnClerk(counter)
+end
+
+-- Undo an in-flight spawn that was cancelled or failed: drop any ped already
+-- created, hand the claim back, clear both flight flags, then re-arm one spawn
+-- if the player never actually left.
 local function cancelSpawn(counter, ped)
     if ped and DoesEntityExist(ped) then DeleteEntity(ped) end
     lib.callback.await('dps-shops:server:release', false, counter.id)
     spawning[counter.id] = nil
     cancelled[counter.id] = nil
+    if inside[counter.id] and not retried[counter.id] then
+        retried[counter.id] = true
+        SetTimeout(250, function() retrySpawn(counter) end)
+    end
 end
 
-local function spawnClerk(counter)
+spawnClerk = function(counter)
     spawning[counter.id] = true
 
-    local ok, model, salt = lib.callback.await('dps-shops:server:claim', false, counter.id)
+    local ok, model = lib.callback.await('dps-shops:server:claim', false, counter.id)
     if not ok then
         spawning[counter.id] = nil
         cancelled[counter.id] = nil
         return
     end
-    if cancelled[counter.id] then cancelSpawn(counter, nil) return end
 
-    -- lib.requestModel throws on a timeout or a bad model, and by this point
-    -- the server has already granted the claim; pcall it so that throw cannot
-    -- skip the release below and leak the claim.
-    local okModel, hash = pcall(loadModel, model)
-    if not okModel or not hash then cancelSpawn(counter, nil) return end
-    if cancelled[counter.id] then cancelSpawn(counter, nil) return end
+    -- Everything past the granted claim runs inside one pcall. lib.requestModel
+    -- throws on a timeout or a bad model and any native below can error too; a
+    -- throw here would leak the claim and leave spawning[id] true forever, so
+    -- every exit routes through the status check below. `ped` is an upvalue so
+    -- a throw after CreatePed still hands the handle back for deletion.
+    local ped
+    local okRun, status = pcall(function()
+        if cancelled[counter.id] then return 'cancel' end
 
-    local ped = CreatePed(4, hash, counter.coords.x, counter.coords.y, counter.coords.z - 1.0, counter.heading, true, true)
-    SetModelAsNoLongerNeeded(hash)
-    if not DoesEntityExist(ped) then cancelSpawn(counter, nil) return end
-    if cancelled[counter.id] then cancelSpawn(counter, ped) return end
+        local hash = loadModel(model)
+        if not hash then return 'fail' end
+        if cancelled[counter.id] then return 'cancel' end
 
-    SetEntityAsMissionEntity(ped, true, true)
-    SetBlockingOfNonTemporaryEvents(ped, true)
-    SetPedFleeAttributes(ped, 0, false)
-    SetPedCanRagdollFromPlayerImpact(ped, false)
-    SetEntityInvincible(ped, true)
-    FreezeEntityPosition(ped, true)
+        ped = CreatePed(4, hash, counter.coords.x, counter.coords.y, counter.coords.z - 1.0, counter.heading, true, true)
+        SetModelAsNoLongerNeeded(hash)
+        if not DoesEntityExist(ped) then ped = nil return 'fail' end
+        if cancelled[counter.id] then return 'cancel' end
 
-    -- A slightly wrong SPOT z should not leave the clerk floating or buried;
-    -- only correct it when solid ground turns up close to the configured z.
-    local found, groundZ = GetGroundZFor_3dCoord(counter.coords.x, counter.coords.y, counter.coords.z, false)
-    if found and math.abs(groundZ - counter.coords.z) <= 1.5 then
-        SetEntityCoordsNoOffset(ped, counter.coords.x, counter.coords.y, groundZ, false, false, false)
+        SetEntityAsMissionEntity(ped, true, true)
+        SetBlockingOfNonTemporaryEvents(ped, true)
+        SetPedFleeAttributes(ped, 0, false)
+        SetPedCanRagdollFromPlayerImpact(ped, false)
+        SetEntityInvincible(ped, true)
+        FreezeEntityPosition(ped, true)
+        SetEntityCoordsNoOffset(ped, counter.coords.x, counter.coords.y, counterZ(counter), false, false, false)
+
+        TaskStartScenarioInPlace(ped, Shops.persona(counter, Config).scenario, 0, true)
+
+        local netId = NetworkGetNetworkIdFromEntity(ped)
+        SetNetworkIdCanMigrate(netId, false)
+        if not lib.callback.await('dps-shops:server:registered', false, counter.id, netId) then
+            return 'rejected'
+        end
+        if cancelled[counter.id] then return 'cancel' end
+        return 'ok'
+    end)
+
+    if not okRun then
+        lib.print.error(('dps-shops: spawn for %s failed: %s'):format(counter.id, tostring(status)))
+        status = 'fail'
     end
 
-    local persona = Shops.persona(counter, Config)
-    TaskStartScenarioInPlace(ped, persona.scenario, 0, true)
+    if status == 'ok' then
+        owned[counter.id] = ped
+        pedCache[counter.id] = ped
+        spawning[counter.id] = nil
+        cancelled[counter.id] = nil
+        retried[counter.id] = nil
+        return
+    end
 
-    local netId = NetworkGetNetworkIdFromEntity(ped)
-    SetNetworkIdCanMigrate(netId, false)
-    local reg = lib.callback.await('dps-shops:server:registered', false, counter.id, netId)
-    if not reg then
-        -- the server already released the claim itself on a rejected registration
-        DeleteEntity(ped)
+    if status == 'rejected' then
+        -- The server already released the claim itself on a rejected
+        -- registration, and a retry would only be rejected again.
+        if ped and DoesEntityExist(ped) then DeleteEntity(ped) end
         spawning[counter.id] = nil
         cancelled[counter.id] = nil
         return
     end
-    if cancelled[counter.id] then cancelSpawn(counter, ped) return end
 
-    owned[counter.id] = ped
-    pedCache[counter.id] = ped
-    spawning[counter.id] = nil
-    cancelled[counter.id] = nil
+    cancelSpawn(counter, ped)
 end
 
 local function despawnClerk(counter)
@@ -163,10 +205,13 @@ for _, counter in ipairs(Config.Counters) do
         -- SPOT placeholders (Roxwood bait shop, as of this task) stay dark: no points at all.
         local spawnPoint = lib.points.new({ coords = counter.coords, distance = Config.SpawnDistance })
         function spawnPoint:onEnter()
+            inside[counter.id] = true
             if spawning[counter.id] then return end
             if not Clerk.pedOf(counter.id) then spawnClerk(counter) end
         end
         function spawnPoint:onExit()
+            inside[counter.id] = nil
+            retried[counter.id] = nil
             greeted[counter.id] = nil
             if spawning[counter.id] then cancelled[counter.id] = true end
             if owned[counter.id] then despawnClerk(counter) end
@@ -182,6 +227,128 @@ for _, counter in ipairs(Config.Counters) do
         end
     end
 end
+
+-- ---------------------------------------------------------------------------
+-- Rendering the server's reaction. The roll happened on the server; this only
+-- plays it, and only on the client that owns the ped, so every player sees one
+-- clerk doing one thing.
+-- ---------------------------------------------------------------------------
+
+local HandsUpDict = 'random@mugging3'
+local HandsUpAnim = 'handsup_standing_base'
+local HandsUpSeconds = 6
+local CorpseSeconds = 30
+local BagRetries = 10
+
+-- Back to work after the reaction window: no weapon, no tasks, invincible and
+-- frozen on the spot again, running the persona's scenario as if nothing happened.
+local function returnToCounter(ped, counter)
+    if not ped or not DoesEntityExist(ped) or IsEntityDead(ped) then return end
+    ClearPedTasksImmediately(ped)
+    RemoveAllPedWeapons(ped, true)
+    SetPedAccuracy(ped, 0)
+    SetEntityInvincible(ped, true)
+    SetPedCanRagdollFromPlayerImpact(ped, false)
+    SetEntityCoordsNoOffset(ped, counter.coords.x, counter.coords.y, counterZ(counter), false, false, false)
+    SetEntityHeading(ped, counter.heading)
+    FreezeEntityPosition(ped, true)
+    TaskStartScenarioInPlace(ped, Shops.persona(counter, Config).scenario, 0, true)
+end
+
+local function foldUp(ped, counter, persona)
+    Clerk.say(ped, persona.fright)
+    pcall(lib.requestAnimDict, HandsUpDict, 3000)
+    if not DoesEntityExist(ped) or IsEntityDead(ped) then return end
+    TaskPlayAnim(ped, HandsUpDict, HandsUpAnim, 8.0, -8.0, -1, 49, 0, false, false, false)
+    SetTimeout(HandsUpSeconds * 1000, function()
+        if not DoesEntityExist(ped) or IsEntityDead(ped) then return end
+        if not Entity(ped).state.reaction then return end
+        ClearPedTasks(ped)
+        -- head down, hands low: still cowed, but not stuck in the hands-up loop
+        TaskStartScenarioInPlace(ped, 'WORLD_HUMAN_BUM_STANDING', 0, true)
+    end)
+end
+
+-- Real weapon, real accuracy: an aggressive clerk can kill, by design.
+local function fightBack(ped, counter, persona, by)
+    Clerk.say(ped, persona.anger)
+    SetTimeout(persona.drawDelay or 1500, function()
+        if not DoesEntityExist(ped) or IsEntityDead(ped) then return end
+        if not Entity(ped).state.reaction then return end
+        GiveWeaponToPed(ped, joaat(persona.weapon), 60, false, true)
+        SetPedAccuracy(ped, persona.accuracy or 30)
+        SetPedCombatAttributes(ped, 46, true)   -- always fight
+        SetPedCombatAttributes(ped, 5, true)    -- will fight an armed ped
+        SetPedCombatRange(ped, 0)
+        SetPedFleeAttributes(ped, 0, false)
+        local robber = by and GetPlayerPed(GetPlayerFromServerId(by)) or 0
+        if robber and robber ~= 0 and DoesEntityExist(robber) and not IsEntityDead(robber) then
+            TaskCombatPed(ped, robber, 0, 16)
+        else
+            TaskCombatHatedTargetsAroundPed(ped, 15.0, 0)
+        end
+    end)
+end
+
+local function react(ped, counter, data)
+    local persona = Shops.persona(counter, Config)
+    SetEntityInvincible(ped, false)
+    FreezeEntityPosition(ped, false)
+    ClearPedTasks(ped)
+    if data.kind == 'aggressive' and persona.weapon then
+        fightBack(ped, counter, persona, data.by)
+    else
+        foldUp(ped, counter, persona)
+    end
+end
+
+-- The owner watches its own clerk while a reaction is on: no thread, a one
+-- second timer chain that stops when the reaction clears or the ped dies.
+local watchDeath
+watchDeath = function(id)
+    local ped = owned[id]
+    if not ped or not DoesEntityExist(ped) then return end
+    if IsEntityDead(ped) then
+        owned[id] = nil
+        pedCache[id] = nil
+        greeted[id] = nil
+        stopChatter(id)
+        lib.callback.await('dps-shops:server:clerkDead', false, id)
+        -- The counter must end up visibly empty: the body lies there, then goes.
+        SetTimeout(CorpseSeconds * 1000, function()
+            if DoesEntityExist(ped) then DeleteEntity(ped) end
+        end)
+        return
+    end
+    if Entity(ped).state.reaction then SetTimeout(1000, function() watchDeath(id) end) end
+end
+
+-- One handler for the whole reaction life cycle. GetEntityFromStateBagName can
+-- return 0 for a frame or two after the bag lands, so it is given a few tries.
+AddStateBagChangeHandler('reaction', nil, function(bagName, _, value)
+    CreateThread(function()
+        local ent
+        for _ = 1, BagRetries do
+            ent = GetEntityFromStateBagName(bagName)
+            if ent and ent ~= 0 and DoesEntityExist(ent) then break end
+            Wait(50)
+        end
+        if not ent or ent == 0 or not DoesEntityExist(ent) then return end
+        local id = Entity(ent).state.dpsShop
+        -- Only the owner drives the ped; everyone else just watches it over the network.
+        if not id or owned[id] ~= ent then return end
+        local counter = Shops.counterById(Config, id)
+        if not counter then return end
+        if value then
+            greeted[id] = nil
+            stopChatter(id)
+            react(ent, counter, value)
+            watchDeath(id)
+        else
+            returnToCounter(ent, counter)
+        end
+    end)
+end)
 
 RegisterNetEvent('dps-shops:client:counterState', function(id, state)
     if state == 'dead' then
@@ -200,6 +367,7 @@ end)
 
 RegisterNetEvent('qbx_core:client:playerLoggedOut', function()
     for _, ped in pairs(owned) do if DoesEntityExist(ped) then DeleteEntity(ped) end end
-    owned, pedCache, greeted, chatterToken, spawning, cancelled = {}, {}, {}, {}, {}, {}
+    owned, pedCache, greeted, chatterToken = {}, {}, {}, {}
+    spawning, cancelled, inside, retried = {}, {}, {}, {}
     TriggerServerEvent('dps-shops:server:releaseAll')
 end)
