@@ -37,8 +37,10 @@ end)
 lib.callback.register('dps-shops:server:registered', function(src, id, netId)
     if claims:ownerOf(id) ~= src then return false end
     local rec = counterRecord(id)
+    if rec.netId then return false end
     if type(netId) ~= 'number' then
         claims:release(id, src)
+        rec.netId = nil
         rec.claimedAt = nil
         return false
     end
@@ -48,6 +50,7 @@ lib.callback.register('dps-shops:server:registered', function(src, id, netId)
         and not IsPedAPlayer(ent) and #(GetEntityCoords(ent) - counter.coords) <= 5.0
     if not valid then
         claims:release(id, src)
+        rec.netId = nil
         rec.claimedAt = nil
         return false
     end
