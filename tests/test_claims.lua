@@ -1,0 +1,12 @@
+-- tests/test_claims.lua
+local c = Shops.Claims.new()
+check('first claim wins', c:claim('sandy_247', 7))
+check('second claim loses', not c:claim('sandy_247', 9))
+eq('owner recorded', c:ownerOf('sandy_247'), 7)
+check('wrong source cannot release', not c:release('sandy_247', 9))
+check('owner releases', c:release('sandy_247', 7))
+eq('released counter has no owner', c:ownerOf('sandy_247'), nil)
+c:claim('a', 3); c:claim('b', 3)
+eq('bySource lists both', #c:bySource(3), 2)
+local list = c:bySource(3)
+check('bySource contains claimed ids', (list[1] == 'a' or list[1] == 'b') and (list[2] == 'a' or list[2] == 'b'))
