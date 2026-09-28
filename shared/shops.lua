@@ -18,6 +18,7 @@ end
 
 -- Roxwood counters speak Roxwood unless the counter names its persona.
 function Shops.personaKey(counter)
+    if not counter then return 'quickie' end
     if counter.persona then return counter.persona end
     if counter.region == 'roxwood' then return 'roxwood' end
     return counter.kind or 'quickie'
@@ -30,8 +31,8 @@ end
 
 -- A stable pick per counter so the same clerk works the same counter (until a respawn).
 function Shops.pedFor(persona, counterId, salt)
-    local list = persona.peds
-    if #list == 0 then return nil end
+    local list = persona and persona.peds
+    if not list or #list == 0 then return nil end
     local h = salt or 0
     for i = 1, #counterId do h = (h * 31 + counterId:byte(i)) % 2147483647 end
     return list[(h % #list) + 1]
