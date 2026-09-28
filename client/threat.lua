@@ -75,16 +75,33 @@ local function myThreat(counter)
     report(counter.id, 'aim', countRobbers(counter))
 end
 
--- m-StoreRobbery hook: its CallCops() fires this when a register is being
--- robbed, so a clerk reacts to the robbery even if nobody aimed at them.
-AddEventHandler('dps-shops:client:robberyStarted', function()
+-- The m-StoreRobbery hook. Reports a robbery threat for every counter the player
+-- is standing at and answers whether any clerk actually took it, so the vendor
+-- dispatch is skipped only when a clerk really raised the alarm: a counter with
+-- no clerk, a clerk already reacting or dead, or a second robbery inside the
+-- cooldown all answer false and let the vendor dispatch through.
+-- This awaits, so it must be called from a coroutine.
+local function robberyStarted()
     local pos = GetEntityCoords(cache.ped)
+    local taken = false
     for _, counter in ipairs(Config.Counters) do
-        if #(pos - counter.coords) < Config.ThreatDistance then
+        if not (counter.coords.x == 0.0 and counter.coords.y == 0.0 and counter.coords.z == 0.0)
+            and #(pos - counter.coords) < Config.ThreatDistance then
             reported[counter.id] = GetGameTimer()
-            report(counter.id, 'robbery', 1)
+            if lib.callback.await('dps-shops:server:threat', false, counter.id, 'robbery', 1) then
+                taken = true
+            end
         end
     end
+    return taken
+end
+
+exports('RobberyStarted', robberyStarted)
+
+-- The event form stays for anything else that wants to poke a clerk; it runs the
+-- same work on its own thread and ignores the answer.
+AddEventHandler('dps-shops:client:robberyStarted', function()
+    CreateThread(function() robberyStarted() end)
 end)
 
 for _, counter in ipairs(Config.Counters) do
