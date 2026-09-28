@@ -1,13 +1,16 @@
 Clerk = {}
 local owned = {}         -- id -> ped (this client spawned it)
 local pedCache = {}      -- id -> last-seen ped for a clerk I do not own (validated before reuse)
-local greeted = {}       -- id -> true once greeted this visit (spawn-point visit)
+local greeted = {}       -- id -> true once greeted this visit (a visit = one stay inside the keep ring)
 local chatterToken = {}  -- id -> current chatter generation; a stale closure compares and dies quietly
 local spawning = {}      -- id -> true while spawnClerk is mid-flight (holds a granted claim)
 local cancelled = {}     -- id -> true when the player left before an in-flight spawn finished
 local inside = {}        -- id -> true while this player is inside the wider keep ring
 local retried = {}       -- id -> true once an unwound spawn has been retried this visit
 local nearGreet = {}     -- id -> true while this player is inside the greet ring
+local failed = {}        -- id -> game time a spawn last failed outright (model trouble)
+
+local FailedBackoffMs = 30000   -- how long a counter nobody can fill is left alone
 
 -- Never let a mis-set config turn idle chatter into a stutter.
 local function chatterDelay()
@@ -70,10 +73,18 @@ local spawnClerk   -- forward: an unwound spawn restarts itself through cancelSp
 local startSpawn   -- forward: the one way a spawn is ever started
 local clerkReady   -- forward: assigned once the greet helpers exist
 
--- One retry per spawn-point visit, and only while the player is still inside
--- and the counter is still empty: an exit-then-re-enter during an in-flight
--- spawn would otherwise leave the counter dark until the next boundary crossing.
+-- Has a spawn here just failed outright? Then leave the counter alone for a
+-- while: a ped model that cannot load will not load a quarter second later, and
+-- retrying would only bounce 'free' broadcasts around the players standing there.
+local function backingOff(id)
+    return failed[id] ~= nil and GetGameTimer() - failed[id] < FailedBackoffMs
+end
+
+-- One retry per stay inside the keep ring, and only while the player is still
+-- inside and the counter is still empty: an exit-then-re-enter during an
+-- in-flight spawn would otherwise leave the counter dark until the next crossing.
 local function retrySpawn(counter)
+    if backingOff(counter.id) then return end
     -- Checked again here, not only when the retry was armed: 250 ms is long
     -- enough for the player to have walked back out of the ring.
     if not inside[counter.id] then return end
@@ -152,6 +163,7 @@ spawnClerk = function(counter)
         spawning[counter.id] = nil
         cancelled[counter.id] = nil
         retried[counter.id] = nil
+        failed[counter.id] = nil
         if Config.Debug then
             lib.print.info(('dps-shops: clerk up at %s'):format(counter.id))
         end
@@ -171,6 +183,10 @@ spawnClerk = function(counter)
         return
     end
 
+    if status == 'fail' then
+        -- Not a cancellation: the model or the ped itself would not come up.
+        failed[counter.id] = GetGameTimer()
+    end
     cancelSpawn(counter, ped)
 end
 
@@ -202,10 +218,11 @@ local function despawnClerk(counter)
     lib.callback.await('dps-shops:server:release', false, counter.id)
 end
 
--- Greet once per spawn-point visit. Skipped quietly (without consuming the
--- once-per-visit flag) when the clerk is missing, dead, mid-reaction or in
--- aftermath, so a real greeting can still happen once things calm down and
--- the player crosses the greet boundary again.
+-- Greet once per visit, a visit being one stay inside the keep ring (the flag is
+-- cleared when the player leaves DespawnDistance). Skipped quietly, without
+-- consuming the flag, when the clerk is missing, dead, mid-reaction or in
+-- aftermath, so a real greeting can still happen once things calm down and the
+-- player crosses the greet boundary again.
 local function attemptGreet(counter)
     if greeted[counter.id] then return end
     local ped = Clerk.pedOf(counter.id)
@@ -489,6 +506,7 @@ RegisterNetEvent('dps-shops:client:counterState', function(id, state)
         -- ring never cross a point boundary, so this is the only thing that can
         -- refill it for them. The random delay spreads several of them out; the
         -- server's claim is still the lock, so a loser simply gets a false.
+        if backingOff(id) then return end
         if not inside[id] or spawning[id] or owned[id] then return end
         if Clerk.pedOf(id) then return end
         local counter = Shops.counterById(Config, id)
@@ -509,6 +527,6 @@ end)
 RegisterNetEvent('qbx_core:client:playerLoggedOut', function()
     for _, ped in pairs(owned) do if DoesEntityExist(ped) then DeleteEntity(ped) end end
     owned, pedCache, greeted, chatterToken, nearGreet = {}, {}, {}, {}, {}
-    spawning, cancelled, inside, retried, fighting = {}, {}, {}, {}, {}
+    spawning, cancelled, inside, retried, fighting, failed = {}, {}, {}, {}, {}, {}
     TriggerServerEvent('dps-shops:server:releaseAll')
 end)

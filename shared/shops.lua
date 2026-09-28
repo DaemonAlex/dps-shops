@@ -160,6 +160,9 @@ function Shops.configWarnings(cfg)
     end
 
     for key, p in pairs(cfg.Personas or {}) do
+        if type(p.peds) ~= 'table' or #p.peds == 0 then
+            add(('persona %s: no ped models listed, no clerk can ever spawn'):format(tostring(key)))
+        end
         if (p.aggressive or 0) > (p.aggressiveMax or 0) then
             add(('persona %s: aggressive is above aggressiveMax'):format(tostring(key)))
         end

@@ -246,10 +246,15 @@ local function endReaction(id, incident)
     -- never greet anyone again.
     SetTimeout(Config.Aftermath.seconds * 1000, function()
         local r = counters[id]
-        if not r or r.incident ~= incident or r.state ~= 'aftermath' then return end
-        if r.until_ and os.time() < r.until_ then return end
-        r.state = 'idle'
-        r.until_ = nil
+        -- stateOf may already have retired the record while nobody was looking,
+        -- but the BAG still needs clearing or that clerk never greets again, so
+        -- the state is not a precondition. Only a live reaction, or a different
+        -- incident having taken over, means hands off.
+        if not r or r.incident ~= incident or r.state == 'reacting' then return end
+        if r.state == 'aftermath' then
+            if r.until_ and os.time() < r.until_ then return end
+            r.state, r.until_ = 'idle', nil
+        end
         local e = entityOf(r)
         if e then Entity(e).state:set('aftermath', nil, true) end
     end)

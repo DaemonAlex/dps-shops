@@ -18,7 +18,10 @@ local function base()
     return {
         SpawnDistance = 60.0, DespawnDistance = 90.0, GreetDistance = 3.0,
         ThreatDistance = 8.0, ChatterSeconds = 60,
-        Personas = { quickie = { aggressive = 0.1, aggressiveMax = 0.35, weapon = 'WEAPON_PISTOL' } },
+        Personas = { quickie = {
+            peds = { 'mp_m_shopkeep_01' },
+            aggressive = 0.1, aggressiveMax = 0.35, weapon = 'WEAPON_PISTOL',
+        } },
         Counters = { { id = 'a', kind = 'quickie' } },
     }
 end
@@ -51,6 +54,14 @@ check('a weapon that is not a WEAPON_ name warns', has(Shops.configWarnings(cfg)
 cfg = base()
 cfg.Personas.quickie.weapon = nil
 eq('a persona with no weapon is fine', #Shops.configWarnings(cfg), 0)
+
+cfg = base()
+cfg.Personas.quickie.peds = nil
+check('a persona with no peds list warns', has(Shops.configWarnings(cfg), 'no ped models listed'))
+
+cfg = base()
+cfg.Personas.quickie.peds = {}
+check('a persona with an empty peds list warns', has(Shops.configWarnings(cfg), 'no ped models listed'))
 
 cfg = base()
 cfg.Counters = { { id = 'b', kind = 'nosuchkind' } }
