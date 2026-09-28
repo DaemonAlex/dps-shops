@@ -24,12 +24,6 @@ local function clerkPed(id)
     return ped
 end
 
-local function gunInHand()
-    local weapon = GetSelectedPedWeapon(cache.ped)
-    if weapon == joaat('WEAPON_UNARMED') then return false end
-    return GetWeapontypeGroup(weapon) ~= joaat('GROUP_MELEE')
-end
-
 -- Advisory only: the server clamps this to 1..4 and never trusts it further.
 local function countRobbers(counter)
     local n = 1
@@ -45,9 +39,10 @@ local function countRobbers(counter)
 end
 
 -- The callback is awaited on its own thread so the per-frame check never yields.
-local function report(id, gun, robbers)
+-- The reason is all the client gets to say: the server reads the weapon itself.
+local function report(id, reason, robbers)
     CreateThread(function()
-        lib.callback.await('dps-shops:server:threat', false, id, gun, robbers)
+        lib.callback.await('dps-shops:server:threat', false, id, reason, robbers)
     end)
 end
 
@@ -77,7 +72,7 @@ local function myThreat(counter)
     if now - aimingSince[counter.id] < Config.AimSeconds * 1000 then return end
     reported[counter.id] = now
     aimingSince[counter.id] = nil
-    report(counter.id, gunInHand(), countRobbers(counter))
+    report(counter.id, 'aim', countRobbers(counter))
 end
 
 -- m-StoreRobbery hook: its CallCops() fires this when a register is being
@@ -87,7 +82,7 @@ AddEventHandler('dps-shops:client:robberyStarted', function()
     for _, counter in ipairs(Config.Counters) do
         if #(pos - counter.coords) < Config.ThreatDistance then
             reported[counter.id] = GetGameTimer()
-            report(counter.id, true, 1)
+            report(counter.id, 'robbery', 1)
         end
     end
 end)

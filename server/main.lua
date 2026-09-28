@@ -12,6 +12,18 @@ local function counterRecord(id)
     return counters[id]
 end
 
+-- Every read of a counter's state goes through here, so an aftermath window that
+-- has run out is retired the moment anything looks at it.
+local function stateOf(rec)
+    if not rec then return 'idle' end
+    local s = Shops.stateOf(rec.state, rec.until_, os.time())
+    if s ~= rec.state then
+        rec.state = s
+        rec.until_ = nil
+    end
+    return s
+end
+
 local function nearCounter(src, counter, maxDist)
     local ped = GetPlayerPed(src)
     if not ped or ped == 0 then return false end
@@ -24,8 +36,9 @@ lib.callback.register('dps-shops:server:claim', function(src, id)
     if not counter then return false end
     if not nearCounter(src, counter, Config.SpawnDistance + 10.0) then return false end
     local rec = counterRecord(id)
-    if rec.state == 'dead' and rec.until_ and os.time() < rec.until_ then return false end
-    if rec.state == 'dead' then rec.state = 'idle'; rec.salt = rec.salt + 1 end
+    local state = stateOf(rec)
+    if state == 'dead' and rec.until_ and os.time() < rec.until_ then return false end
+    if state == 'dead' then rec.state = 'idle'; rec.until_ = nil; rec.salt = rec.salt + 1 end
     local owner = claims:ownerOf(id)
     if owner and not rec.netId and rec.claimedAt and os.time() - rec.claimedAt > 15 then
         claims:release(id, owner)
@@ -60,14 +73,9 @@ lib.callback.register('dps-shops:server:registered', function(src, id, netId)
     rec.netId = netId
     Entity(ent).state:set('dpsShop', id, true)
     -- A counter that was robbed stays jumpy across respawns: hand the fresh
-    -- clerk the aftermath flag, or retire the window if it has run out.
-    if rec.state == 'aftermath' then
-        if rec.until_ and os.time() < rec.until_ then
-            Entity(ent).state:set('aftermath', true, true)
-        else
-            rec.state = 'idle'
-            rec.until_ = nil
-        end
+    -- clerk the aftermath flag. stateOf retires a window that has run out.
+    if stateOf(rec) == 'aftermath' then
+        Entity(ent).state:set('aftermath', true, true)
     end
     return true
 end)
@@ -175,10 +183,12 @@ end
 
 -- End of the reaction window: the clerk goes back to work, the counter keeps
 -- the aftermath flag so the next threat rolls with the bonus and nobody is
--- greeted while it lasts.
-local function endReaction(id)
+-- greeted while it lasts. `incident` pins this timer to the incident that
+-- started it, so a timer left over from an earlier one cannot end a later one.
+local function endReaction(id, incident)
     local rec = counters[id]
-    if not rec or rec.state ~= 'reacting' then return end
+    if not rec or rec.incident ~= incident then return end
+    if rec.state ~= 'reacting' then return end
     rec.state = 'aftermath'
     rec.until_ = os.time() + Config.Aftermath.seconds
     rec.reaction = nil
@@ -188,44 +198,80 @@ local function endReaction(id)
     Entity(ent).state:set('aftermath', true, true)
 end
 
-lib.callback.register('dps-shops:server:threat', function(src, id, gun, robbers)
+-- `reason` is 'aim' (a weapon held on the clerk) or 'robbery' (the store-robbery
+-- script pulling the register). The client never says what it is holding: for an
+-- 'aim' the weapon is read from the server's own view of the player's ped.
+lib.callback.register('dps-shops:server:threat', function(src, id, reason, robbers)
+    if reason ~= 'aim' and reason ~= 'robbery' then return nil end
     local counter = Shops.counterById(Config, id)
     if not counter then return nil end
     local now = os.time()
     if Shops.throttled(threatLast[src], now, ThreatRateSeconds) then return nil end
     if not nearCounter(src, counter, Config.ThreatDistance + 2.0) then return nil end
+
+    -- A robber pulling a register holds a lockpick, not a gun, so only the aim
+    -- path checks the weapon; an unarmed aim is simply not a threat.
+    local gun = true
+    local armed = true
+    if reason == 'aim' then
+        local w = GetSelectedPedWeapon(GetPlayerPed(src))
+        armed = (w ~= nil) and w ~= joaat('WEAPON_UNARMED')
+        if not armed then return nil end
+        gun = not Shops.isMeleeHash(w)
+    end
+
     local rec = counterRecord(id)
-    local accepted, aftermath = Shops.threatAccepted(rec, now)
+    stateOf(rec)
+    local accepted, aftermath = Shops.threatDecision({
+        reason = reason,
+        armed = armed,
+        state = rec.state,
+        until_ = rec.until_,
+        lastRobberyAt = rec.lastRobberyAt,
+        now = now,
+    })
     if not accepted then return nil end
     local ent = entityOf(rec)
     if not ent then return nil end
 
     threatLast[src] = now
+    if reason == 'robbery' then rec.lastRobberyAt = now end
+
     local persona = Shops.persona(counter, Config)
     local kind = Shops.rollReaction(persona, {
         hour = tonumber(os.date('%H')),
         robbers = Shops.clampRobbers(robbers),
         aftermath = aftermath,
-        gun = gun == true,
+        gun = gun,
     }, nil, Config)
 
+    -- One token per incident: every timer this call starts, here and on the
+    -- clients, checks it before touching anything.
+    rec.incident = (rec.incident or 0) + 1
+    local n = rec.incident
     rec.state = 'reacting'
     rec.reaction = kind
     rec.until_ = nil
     Entity(ent).state:set('aftermath', nil, true)
-    Entity(ent).state:set('reaction', { kind = kind, at = now, by = src }, true)
+    Entity(ent).state:set('reaction', { kind = kind, at = now, by = src, incident = n }, true)
 
-    SetTimeout(persona.alarmDelay or 4000, function() alarm(counter) end)
-    SetTimeout(ReactionSeconds * 1000, function() endReaction(id) end)
+    SetTimeout(persona.alarmDelay or 4000, function()
+        if not counters[id] or counters[id].incident ~= n then return end
+        alarm(counter)
+    end)
+    SetTimeout(ReactionSeconds * 1000, function() endReaction(id, n) end)
     return kind
 end)
 
 -- Only the owning client reports its own clerk's death, and the server checks
 -- the body before it believes it: peds die at 100 on the 100-200 health scale.
+-- A clerk is invincible outside a reaction, so a death report in any other
+-- state is a lie by definition.
 lib.callback.register('dps-shops:server:clerkDead', function(src, id)
     if claims:ownerOf(id) ~= src then return false end
     local rec = counters[id]
     if not rec or not rec.netId then return false end
+    if stateOf(rec) ~= 'reacting' then return false end
     local ent = NetworkGetEntityFromNetworkId(rec.netId)
     local gone = not ent or ent == 0 or not DoesEntityExist(ent)
     if not gone and GetEntityHealth(ent) > 100 then return false end
@@ -234,8 +280,7 @@ lib.callback.register('dps-shops:server:clerkDead', function(src, id)
 end)
 
 exports('GetCounterState', function(id)
-    local rec = counters[id]
-    return rec and rec.state or 'idle'
+    return stateOf(counters[id])
 end)
 
 local personaCount = 0

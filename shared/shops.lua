@@ -74,17 +74,55 @@ function Shops.clampRobbers(n)
     return n
 end
 
--- May a threat be rolled for this counter record right now?
--- Returns accepted, aftermath. A counter mid-reaction or dead refuses; a counter
--- still inside its aftermath window accepts AND carries the aggressive bonus; an
--- expired aftermath accepts as a plain first threat.
-function Shops.threatAccepted(rec, now)
-    if not rec then return false, false end
-    if rec.state == 'reacting' or rec.state == 'dead' then return false, false end
-    if rec.state == 'aftermath' then
-        return true, (rec.until_ ~= nil and now < rec.until_)
+-- One robbery-hook threat per counter per ten minutes.
+Shops.RobberyCooldown = 600
+
+-- The melee group, by name. The server cannot call GetWeapontypeGroup (it is not
+-- in the server native table), so the gun flag is derived from this list on both
+-- sides instead. A weapon missing from the list simply counts as a gun.
+Shops.MeleeWeapons = {
+    'WEAPON_UNARMED', 'WEAPON_KNIFE', 'WEAPON_NIGHTSTICK', 'WEAPON_HAMMER', 'WEAPON_BAT',
+    'WEAPON_GOLFCLUB', 'WEAPON_CROWBAR', 'WEAPON_BOTTLE', 'WEAPON_DAGGER', 'WEAPON_HATCHET',
+    'WEAPON_KNUCKLE', 'WEAPON_MACHETE', 'WEAPON_FLASHLIGHT', 'WEAPON_SWITCHBLADE',
+    'WEAPON_POOLCUE', 'WEAPON_WRENCH', 'WEAPON_BATTLEAXE', 'WEAPON_STONE_HATCHET',
+    'WEAPON_CANDYCANE', 'WEAPON_ACIDPACKAGE',
+}
+
+local meleeHashes
+function Shops.isMeleeHash(hash)
+    if not meleeHashes then
+        meleeHashes = {}
+        for _, name in ipairs(Shops.MeleeWeapons) do meleeHashes[joaat(name)] = true end
     end
-    return true, false
+    return meleeHashes[hash] == true
+end
+
+-- Collapse an aftermath window that has run out. 'dead' is deliberately left
+-- alone: the claim path owns that expiry because it also has to bump the salt.
+function Shops.stateOf(state, until_, now)
+    state = state or 'idle'
+    if state == 'aftermath' and (not until_ or now >= until_) then return 'idle' end
+    return state
+end
+
+-- The whole accept/refuse decision for a threat, with no natives in it.
+-- ctx = { reason = 'aim'|'robbery', armed, state, until_, lastRobberyAt, now }
+-- Returns accepted, aftermath, why. An unknown reason always refuses; an 'aim'
+-- from an unarmed player always refuses; a counter mid-reaction or dead refuses;
+-- a counter still inside its aftermath window accepts AND carries the bonus.
+function Shops.threatDecision(ctx)
+    ctx = ctx or {}
+    local now = ctx.now or 0
+    if ctx.reason ~= 'aim' and ctx.reason ~= 'robbery' then return false, false, 'reason' end
+    if ctx.reason == 'aim' and not ctx.armed then return false, false, 'unarmed' end
+    local state = Shops.stateOf(ctx.state, ctx.until_, now)
+    if state == 'reacting' then return false, false, 'reacting' end
+    if state == 'dead' then return false, false, 'dead' end
+    if ctx.reason == 'robbery' and ctx.lastRobberyAt
+        and (now - ctx.lastRobberyAt) < Shops.RobberyCooldown then
+        return false, false, 'cooldown'
+    end
+    return true, state == 'aftermath', 'ok'
 end
 
 -- Per-source rate limit: true when the call must be dropped.

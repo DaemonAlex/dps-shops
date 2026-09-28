@@ -6,6 +6,9 @@ function check(name, ok, detail)
 end
 function eq(name, got, want) check(name, got == want, ('got %s want %s'):format(tostring(got), tostring(want))) end
 vector3 = function(x, y, z) return { x = x, y = y, z = z } end
+-- Stub for the FiveM runtime's joaat: the melee set only needs a stable, unique
+-- key per weapon name, which the name itself is.
+joaat = function(s) return s end
 dofile('config.lua')
 dofile('shared/shops.lua')
 for _, f in ipairs({ 'tests/test_persona.lua', 'tests/test_reaction.lua', 'tests/test_claims.lua' }) do

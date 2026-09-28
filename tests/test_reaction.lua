@@ -18,19 +18,63 @@ eq('robber strings are numbers', Shops.clampRobbers('2'), 2)
 eq('robber junk defaults to one', Shops.clampRobbers('lots'), 1)
 eq('robber fractions floor', Shops.clampRobbers(2.9), 2)
 
--- Which counter states accept a threat, and which of them carry the bonus.
-local acc, aft = Shops.threatAccepted({ state = 'idle' }, 1000)
-check('idle accepts a threat', acc == true and aft == false)
-acc, aft = Shops.threatAccepted({ state = 'reacting' }, 1000)
-check('a reaction already running refuses', acc == false and aft == false)
-acc, aft = Shops.threatAccepted({ state = 'dead', until_ = 2000 }, 1000)
-check('a dead counter refuses', acc == false and aft == false)
-acc, aft = Shops.threatAccepted({ state = 'aftermath', until_ = 2000 }, 1000)
-check('a jumpy counter accepts with the bonus', acc == true and aft == true)
-acc, aft = Shops.threatAccepted({ state = 'aftermath', until_ = 900 }, 1000)
-check('an expired aftermath accepts without the bonus', acc == true and aft == false)
-acc, aft = Shops.threatAccepted(nil, 1000)
-check('no record refuses', acc == false and aft == false)
+-- An aftermath window that has run out reads as idle everywhere.
+eq('a live aftermath stays aftermath', Shops.stateOf('aftermath', 2000, 1000), 'aftermath')
+eq('an expired aftermath reads idle', Shops.stateOf('aftermath', 900, 1000), 'idle')
+eq('an aftermath with no deadline reads idle', Shops.stateOf('aftermath', nil, 1000), 'idle')
+eq('dead is never collapsed by time', Shops.stateOf('dead', 900, 1000), 'dead')
+eq('reacting passes through', Shops.stateOf('reacting', nil, 1000), 'reacting')
+eq('no state reads idle', Shops.stateOf(nil, nil, 1000), 'idle')
+
+-- The melee set decides the gun flag on both sides (the server has no
+-- GetWeapontypeGroup native). tests/run.lua stubs joaat as the identity.
+check('a bat is melee', Shops.isMeleeHash('WEAPON_BAT'))
+check('a wrench is melee', Shops.isMeleeHash('WEAPON_WRENCH'))
+check('unarmed is in the melee set', Shops.isMeleeHash('WEAPON_UNARMED'))
+check('a pistol is not melee', not Shops.isMeleeHash('WEAPON_PISTOL'))
+check('an unknown weapon is not melee', not Shops.isMeleeHash('WEAPON_MADE_UP'))
+
+-- The whole accept/refuse decision, table driven. No natives in any of it.
+local cases = {
+    { 'idle aim from an armed player is accepted',
+      { reason = 'aim', armed = true, state = 'idle', now = 1000 }, true, false, 'ok' },
+    { 'unarmed aim is refused',
+      { reason = 'aim', armed = false, state = 'idle', now = 1000 }, false, false, 'unarmed' },
+    { 'an unknown reason is refused',
+      { reason = 'poke', armed = true, state = 'idle', now = 1000 }, false, false, 'reason' },
+    { 'a missing reason is refused',
+      { armed = true, state = 'idle', now = 1000 }, false, false, 'reason' },
+    { 'a reaction already running refuses',
+      { reason = 'aim', armed = true, state = 'reacting', now = 1000 }, false, false, 'reacting' },
+    { 'a dead counter refuses',
+      { reason = 'aim', armed = true, state = 'dead', until_ = 2000, now = 1000 }, false, false, 'dead' },
+    { 'a jumpy counter accepts with the bonus',
+      { reason = 'aim', armed = true, state = 'aftermath', until_ = 2000, now = 1000 }, true, true, 'ok' },
+    { 'an expired aftermath accepts without the bonus',
+      { reason = 'aim', armed = true, state = 'aftermath', until_ = 900, now = 1000 }, true, false, 'ok' },
+    { 'a robbery needs no weapon',
+      { reason = 'robbery', armed = false, state = 'idle', now = 1000 }, true, false, 'ok' },
+    { 'a first robbery is accepted',
+      { reason = 'robbery', armed = false, state = 'idle', lastRobberyAt = nil, now = 1000 }, true, false, 'ok' },
+    { 'a second robbery inside ten minutes is refused',
+      { reason = 'robbery', armed = false, state = 'idle', lastRobberyAt = 1000, now = 1500 }, false, false, 'cooldown' },
+    { 'a robbery on the cooldown edge is refused',
+      { reason = 'robbery', armed = false, state = 'idle', lastRobberyAt = 1000, now = 1599 }, false, false, 'cooldown' },
+    { 'a robbery after ten minutes is accepted',
+      { reason = 'robbery', armed = false, state = 'idle', lastRobberyAt = 1000, now = 1600 }, true, false, 'ok' },
+    { 'the robbery cooldown does not gate an aim',
+      { reason = 'aim', armed = true, state = 'idle', lastRobberyAt = 1000, now = 1001 }, true, false, 'ok' },
+    { 'a robbery on a dead counter still refuses',
+      { reason = 'robbery', armed = false, state = 'dead', until_ = 2000, now = 1000 }, false, false, 'dead' },
+    { 'no context at all refuses',
+      nil, false, false, 'reason' },
+}
+for _, c in ipairs(cases) do
+    local acc, aft, why = Shops.threatDecision(c[2])
+    check(c[1], acc == c[3] and aft == c[4] and why == c[5],
+        ('got %s/%s/%s want %s/%s/%s'):format(tostring(acc), tostring(aft), tostring(why),
+            tostring(c[3]), tostring(c[4]), tostring(c[5])))
+end
 
 -- Per-source rate limit on the threat callback.
 eq('a first call is never throttled', Shops.throttled(nil, 1000, 5), false)
