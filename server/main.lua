@@ -6,6 +6,9 @@ local counters = {}   -- id -> { netId, state, until_, salt, reaction, claimedAt
 
 -- src -> os.time() of the last ACCEPTED threat call, the per-source rate limit.
 local threatLast = {}
+-- src -> GetGameTimer() of the last REFUSED threat call, so a client that keeps
+-- asking costs nothing: the refusal is answered before any native runs.
+local rejectLast = {}
 
 local function counterRecord(id)
     counters[id] = counters[id] or { state = 'idle', salt = 0 }
@@ -104,6 +107,7 @@ AddEventHandler('playerDropped', function()
     local src = source
     releaseAllFor(src)
     threatLast[src] = nil
+    rejectLast[src] = nil
 end)
 
 RegisterNetEvent('dps-shops:server:releaseAll', function()
@@ -151,6 +155,7 @@ end
 
 local ReactionSeconds = 120   -- how long a clerk stays out of position
 local ThreatRateSeconds = 5   -- at most one accepted threat call per source
+local RejectRateMs = 1000     -- and a refused caller waits a second before the next
 
 local function entityOf(rec)
     if not rec or not rec.netId then return nil end
@@ -198,30 +203,15 @@ local function endReaction(id, incident)
     Entity(ent).state:set('aftermath', true, true)
 end
 
--- `reason` is 'aim' (a weapon held on the clerk) or 'robbery' (the store-robbery
--- script pulling the register). The client never says what it is holding: for an
--- 'aim' the weapon is read from the server's own view of the player's ped.
-lib.callback.register('dps-shops:server:threat', function(src, id, reason, robbers)
-    if reason ~= 'aim' and reason ~= 'robbery' then return nil end
-    local counter = Shops.counterById(Config, id)
-    if not counter then return nil end
-    local now = os.time()
-    if Shops.throttled(threatLast[src], now, ThreatRateSeconds) then return nil end
-    if not nearCounter(src, counter, Config.ThreatDistance + 2.0) then return nil end
-
-    -- A robber pulling a register holds a lockpick, not a gun, so only the aim
-    -- path checks the weapon; an unarmed aim is simply not a threat.
-    local gun = true
-    local armed = true
-    if reason == 'aim' then
-        local w = GetSelectedPedWeapon(GetPlayerPed(src))
-        armed = (w ~= nil) and w ~= joaat('WEAPON_UNARMED')
-        if not armed then return nil end
-        gun = not Shops.isMeleeHash(w)
-    end
-
+-- The one accept path, shared by the aim callback and the RobberyThreat export:
+-- state gate, entity check, the roll, the statebag and the two timers. Returns
+-- the reaction kind, or nil when the counter refuses. Callers have already
+-- proved the source is near this counter.
+local function tryThreat(counter, src, reason, robbers, gun, armed)
+    local id = counter.id
     local rec = counterRecord(id)
     stateOf(rec)
+    local now = os.time()
     local accepted, aftermath = Shops.threatDecision({
         reason = reason,
         armed = armed,
@@ -234,7 +224,6 @@ lib.callback.register('dps-shops:server:threat', function(src, id, reason, robbe
     local ent = entityOf(rec)
     if not ent then return nil end
 
-    threatLast[src] = now
     if reason == 'robbery' then rec.lastRobberyAt = now end
 
     local persona = Shops.persona(counter, Config)
@@ -261,17 +250,82 @@ lib.callback.register('dps-shops:server:threat', function(src, id, reason, robbe
     end)
     SetTimeout(ReactionSeconds * 1000, function() endReaction(id, n) end)
     return kind
+end
+
+-- `reason` is 'aim' (a weapon held on the clerk) or 'robbery' (the store-robbery
+-- script pulling the register). The client never says what it is holding: for an
+-- 'aim' the weapon is read from the server's own view of the player's ped.
+lib.callback.register('dps-shops:server:threat', function(src, id, reason, robbers)
+    -- Cheap argument checks first, then the reject limiter, so a caller that was
+    -- just refused costs nothing: no native runs past this point for them.
+    if reason ~= 'aim' and reason ~= 'robbery' then return nil end
+    local counter = Shops.counterById(Config, id)
+    if not counter then return nil end
+    local tick = GetGameTimer()
+    if Shops.throttled(rejectLast[src], tick, RejectRateMs) then return nil end
+    local now = os.time()
+    if Shops.throttled(threatLast[src], now, ThreatRateSeconds) then
+        rejectLast[src] = tick
+        return nil
+    end
+    if not nearCounter(src, counter, Config.ThreatDistance + 2.0) then
+        rejectLast[src] = tick
+        return nil
+    end
+
+    -- A robber pulling a register holds a lockpick, not a gun, so only the aim
+    -- path checks the weapon; an unarmed aim is refused by Shops.threatDecision.
+    local gun = true
+    local armed = true
+    if reason == 'aim' then
+        local w = GetSelectedPedWeapon(GetPlayerPed(src))
+        armed = (w ~= nil) and w ~= joaat('WEAPON_UNARMED')
+        gun = armed and not Shops.isMeleeHash(w)
+    end
+
+    local kind = tryThreat(counter, src, reason, robbers, gun, armed)
+    if not kind then
+        rejectLast[src] = tick
+        return nil
+    end
+    threatLast[src] = now
+    return kind
+end)
+
+-- Server export for the m-StoreRobbery hook. The decision stays on this side of
+-- the resource boundary: the vendor's server handler asks, and only creates its
+-- own dispatch when the answer is false. Nothing awaits across resources.
+exports('RobberyThreat', function(src)
+    src = tonumber(src)
+    if not src then return false end
+    local ped = GetPlayerPed(src)
+    if not ped or ped == 0 then return false end
+    local pos = GetEntityCoords(ped)
+    local maxDist = Config.ThreatDistance + 2.0
+    local best, bestDist
+    for _, counter in ipairs(Config.Counters) do
+        if not (counter.coords.x == 0.0 and counter.coords.y == 0.0 and counter.coords.z == 0.0) then
+            local d = #(pos - counter.coords)
+            if d <= maxDist and (not bestDist or d < bestDist) then
+                best, bestDist = counter, d
+            end
+        end
+    end
+    if not best then return false end
+    return tryThreat(best, src, 'robbery', 1, true, true) ~= nil
 end)
 
 -- Only the owning client reports its own clerk's death, and the server checks
 -- the body before it believes it: peds die at 100 on the 100-200 health scale.
--- A clerk is invincible outside a reaction, so a death report in any other
--- state is a lie by definition.
+-- A clerk is invincible outside a reaction or its immediate aftermath, so a
+-- death report in any other state is a lie by definition. Aftermath counts
+-- because a clerk can be shot in the gap before invincibility comes back.
 lib.callback.register('dps-shops:server:clerkDead', function(src, id)
     if claims:ownerOf(id) ~= src then return false end
     local rec = counters[id]
     if not rec or not rec.netId then return false end
-    if stateOf(rec) ~= 'reacting' then return false end
+    local state = stateOf(rec)
+    if state ~= 'reacting' and state ~= 'aftermath' then return false end
     local ent = NetworkGetEntityFromNetworkId(rec.netId)
     local gone = not ent or ent == 0 or not DoesEntityExist(ent)
     if not gone and GetEntityHealth(ent) > 100 then return false end
