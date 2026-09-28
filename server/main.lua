@@ -67,14 +67,26 @@ lib.callback.register('dps-shops:server:release', function(src, id)
     return true
 end)
 
-AddEventHandler('playerDropped', function()
-    local src = source
+-- Shared by the drop handler and the client's own "I am leaving" event: release
+-- every claim this source holds without waiting on any callback to resolve
+-- (a callback await during resource stop or a drop may never come back).
+local function releaseAllFor(src)
     for _, id in ipairs(claims:bySource(src)) do
         claims:release(id, src)
         local rec = counterRecord(id)
         rec.netId = nil
         rec.claimedAt = nil
     end
+end
+
+AddEventHandler('playerDropped', function()
+    local src = source
+    releaseAllFor(src)
+end)
+
+RegisterNetEvent('dps-shops:server:releaseAll', function()
+    local src = source
+    releaseAllFor(src)
 end)
 
 AddEventHandler('entityRemoved', function(entity)

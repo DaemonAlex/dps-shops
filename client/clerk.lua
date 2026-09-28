@@ -3,6 +3,8 @@ local owned = {}         -- id -> ped (this client spawned it)
 local pedCache = {}      -- id -> last-seen ped for a clerk I do not own (validated before reuse)
 local greeted = {}       -- id -> true once greeted this visit (spawn-point visit)
 local chatterToken = {}  -- id -> current chatter generation; a stale closure compares and dies quietly
+local spawning = {}      -- id -> true while spawnClerk is mid-flight (holds a granted claim)
+local cancelled = {}     -- id -> true when the player left before an in-flight spawn finished
 
 local function loadModel(model)
     local hash = joaat(model)
@@ -39,20 +41,39 @@ function Clerk.pedOf(id)
     return nil
 end
 
+-- Undo an in-flight spawn that was cancelled (the player left the spawn point
+-- before it finished): drop any ped already created, hand the claim back, and
+-- clear both flight flags so a fresh spawn can start on the next onEnter.
+local function cancelSpawn(counter, ped)
+    if ped and DoesEntityExist(ped) then DeleteEntity(ped) end
+    lib.callback.await('dps-shops:server:release', false, counter.id)
+    spawning[counter.id] = nil
+    cancelled[counter.id] = nil
+end
+
 local function spawnClerk(counter)
+    spawning[counter.id] = true
+
     local ok, model, salt = lib.callback.await('dps-shops:server:claim', false, counter.id)
-    if not ok then return end
-    local hash = loadModel(model)
-    if not hash then
-        lib.callback.await('dps-shops:server:release', false, counter.id)
+    if not ok then
+        spawning[counter.id] = nil
+        cancelled[counter.id] = nil
         return
     end
+    if cancelled[counter.id] then cancelSpawn(counter, nil) return end
+
+    -- lib.requestModel throws on a timeout or a bad model, and by this point
+    -- the server has already granted the claim; pcall it so that throw cannot
+    -- skip the release below and leak the claim.
+    local okModel, hash = pcall(loadModel, model)
+    if not okModel or not hash then cancelSpawn(counter, nil) return end
+    if cancelled[counter.id] then cancelSpawn(counter, nil) return end
+
     local ped = CreatePed(4, hash, counter.coords.x, counter.coords.y, counter.coords.z - 1.0, counter.heading, true, true)
     SetModelAsNoLongerNeeded(hash)
-    if not DoesEntityExist(ped) then
-        lib.callback.await('dps-shops:server:release', false, counter.id)
-        return
-    end
+    if not DoesEntityExist(ped) then cancelSpawn(counter, nil) return end
+    if cancelled[counter.id] then cancelSpawn(counter, ped) return end
+
     SetEntityAsMissionEntity(ped, true, true)
     SetBlockingOfNonTemporaryEvents(ped, true)
     SetPedFleeAttributes(ped, 0, false)
@@ -74,11 +95,18 @@ local function spawnClerk(counter)
     SetNetworkIdCanMigrate(netId, false)
     local reg = lib.callback.await('dps-shops:server:registered', false, counter.id, netId)
     if not reg then
+        -- the server already released the claim itself on a rejected registration
         DeleteEntity(ped)
+        spawning[counter.id] = nil
+        cancelled[counter.id] = nil
         return
     end
+    if cancelled[counter.id] then cancelSpawn(counter, ped) return end
+
     owned[counter.id] = ped
     pedCache[counter.id] = ped
+    spawning[counter.id] = nil
+    cancelled[counter.id] = nil
 end
 
 local function despawnClerk(counter)
@@ -104,7 +132,7 @@ local function attemptGreet(counter)
     Clerk.say(ped, Shops.persona(counter, Config).greet)
 end
 
--- Chatter is a SetTimeout chain, never a loop. `token` pins this chain to one
+-- Chatter is a SetTimeout chain, never a loop. token pins this chain to one
 -- greet-point visit: stopChatter bumps chatterToken[id], so the next time this
 -- closure wakes up the comparison fails and it drops itself without rescheduling.
 local chatterTick
@@ -135,10 +163,12 @@ for _, counter in ipairs(Config.Counters) do
         -- SPOT placeholders (Roxwood bait shop, as of this task) stay dark: no points at all.
         local spawnPoint = lib.points.new({ coords = counter.coords, distance = Config.SpawnDistance })
         function spawnPoint:onEnter()
+            if spawning[counter.id] then return end
             if not Clerk.pedOf(counter.id) then spawnClerk(counter) end
         end
         function spawnPoint:onExit()
             greeted[counter.id] = nil
+            if spawning[counter.id] then cancelled[counter.id] = true end
             if owned[counter.id] then despawnClerk(counter) end
         end
 
@@ -165,9 +195,11 @@ end)
 AddEventHandler('onResourceStop', function(res)
     if res ~= GetCurrentResourceName() then return end
     for _, ped in pairs(owned) do if DoesEntityExist(ped) then DeleteEntity(ped) end end
+    TriggerServerEvent('dps-shops:server:releaseAll')
 end)
 
 RegisterNetEvent('qbx_core:client:playerLoggedOut', function()
     for _, ped in pairs(owned) do if DoesEntityExist(ped) then DeleteEntity(ped) end end
-    owned, pedCache, greeted, chatterToken = {}, {}, {}, {}
+    owned, pedCache, greeted, chatterToken, spawning, cancelled = {}, {}, {}, {}, {}, {}
+    TriggerServerEvent('dps-shops:server:releaseAll')
 end)
