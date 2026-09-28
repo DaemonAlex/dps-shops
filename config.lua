@@ -1,14 +1,22 @@
 Config = {}
 
-Config.Debug = false
+Config.Debug = false               -- extra boot/threat lines in the console
 Config.SpawnDistance = 60.0        -- a player this close claims and spawns the clerk
-Config.DespawnDistance = 90.0      -- the owner this far away deletes it
+Config.DespawnDistance = 90.0      -- and only deletes it again this far out (hysteresis)
 Config.GreetDistance = 3.0
-Config.ChatterSeconds = 60         -- at most one idle line per customer per minute
+Config.ChatterSeconds = 60         -- at most one idle line per customer per minute (floor 5)
 Config.ThreatDistance = 8.0        -- a weapon aimed at the clerk from further away is ignored
 Config.AimSeconds = 0.6            -- how long the aim must hold before it counts
 Config.RespawnSeconds = 600        -- a killed clerk comes back after ten minutes
 Config.Aftermath = { seconds = 3600, aggressiveBonus = 0.25 }
+
+-- How a reaction plays out once the server has rolled it.
+Config.Reaction = {
+    seconds = 120,          -- the clerk is out of position this long, then goes back to work
+    corpseSeconds = 30,     -- a killed clerk's body lies there this long, then the counter is empty
+    huntLimit = 40.0,       -- a fighting clerk never chases further than this from his counter
+    handsUpSeconds = 6,     -- hands held up this long before the head goes down
+}
 Config.NightHours = { from = 22, to = 5 }
 Config.NightBonus = 0.15           -- added to the aggressive chance at night
 Config.CrowdBonus = 0.10           -- per extra visible robber, up to +0.20

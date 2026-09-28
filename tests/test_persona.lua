@@ -1,4 +1,10 @@
 -- tests/test_persona.lua
+-- A counter is only live once it has real coords.
+check('a placed counter is placed', Shops.isPlaced({ coords = vector3(1.0, 2.0, 3.0) }))
+check('a SPOT placeholder is not placed', not Shops.isPlaced({ coords = vector3(0.0, 0.0, 0.0) }))
+check('a counter with no coords is not placed', not Shops.isPlaced({}))
+check('no counter at all is not placed', not Shops.isPlaced(nil))
+
 local rox = Shops.counterById(Config, 'rox_baitshop')
 eq('roxwood counter speaks roxwood', Shops.personaKey(rox), 'roxwood')
 local sandy = Shops.counterById(Config, 'sandy_247')

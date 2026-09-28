@@ -83,7 +83,7 @@ end
 AddEventHandler('dps-shops:client:robberyStarted', function()
     local pos = GetEntityCoords(cache.ped)
     for _, counter in ipairs(Config.Counters) do
-        if not (counter.coords.x == 0.0 and counter.coords.y == 0.0 and counter.coords.z == 0.0)
+        if Shops.isPlaced(counter)
             and #(pos - counter.coords) < Config.ThreatDistance then
             reported[counter.id] = GetGameTimer()
             report(counter.id, 'robbery', 1)
@@ -92,7 +92,7 @@ AddEventHandler('dps-shops:client:robberyStarted', function()
 end)
 
 for _, counter in ipairs(Config.Counters) do
-    if not (counter.coords.x == 0.0 and counter.coords.y == 0.0 and counter.coords.z == 0.0) then
+    if Shops.isPlaced(counter) then
         -- SPOT placeholders stay dark, exactly as in client/clerk.lua.
         local point = lib.points.new({ coords = counter.coords, distance = Config.ThreatDistance })
         function point:nearby() myThreat(counter) end

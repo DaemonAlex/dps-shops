@@ -34,6 +34,13 @@ local function nearCounter(src, counter, maxDist)
     return #(pos - counter.coords) <= maxDist
 end
 
+-- A counter has become claimable again. Players already standing inside the ring
+-- never cross a point boundary, so without this they would stare at an empty
+-- counter until they walked away and came back.
+local function announceFree(id)
+    TriggerClientEvent('dps-shops:client:counterState', -1, id, 'free')
+end
+
 lib.callback.register('dps-shops:server:claim', function(src, id)
     local counter = Shops.counterById(Config, id)
     if not counter then return false end
@@ -44,8 +51,19 @@ lib.callback.register('dps-shops:server:claim', function(src, id)
     if state == 'dead' then rec.state = 'idle'; rec.until_ = nil; rec.salt = rec.salt + 1 end
     local owner = claims:ownerOf(id)
     if owner and not rec.netId and rec.claimedAt and os.time() - rec.claimedAt > 15 then
+        -- claimed but never registered: the spawn died somewhere
         claims:release(id, owner)
         rec.claimedAt = nil
+        owner = nil
+    end
+    if owner and rec.netId then
+        -- registered but the ped is gone without entityRemoved ever firing
+        local e = NetworkGetEntityFromNetworkId(rec.netId)
+        if not e or e == 0 or not DoesEntityExist(e) then
+            claims:release(id, owner)
+            rec.netId = nil
+            rec.claimedAt = nil
+        end
     end
     if not claims:claim(id, src) then return false end
     rec.claimedAt = os.time()
@@ -53,9 +71,15 @@ lib.callback.register('dps-shops:server:claim', function(src, id)
     return true, Shops.pedFor(persona, id, rec.salt), rec.salt
 end)
 
+-- Release contract with the client: on ANY false answer from this callback the
+-- client deletes its ped and does NOT call release. Either the server released
+-- the claim itself (every validation branch below), or the claim belongs to an
+-- already-registered clerk that must survive (the rec.netId branch). A caller
+-- who is not the owner is answered false without touching anybody's claim.
 lib.callback.register('dps-shops:server:registered', function(src, id, netId)
     if claims:ownerOf(id) ~= src then return false end
     local rec = counterRecord(id)
+    -- Single-shot: this owner already registered a clerk here. Keep its claim.
     if rec.netId then return false end
     if type(netId) ~= 'number' then
         claims:release(id, src)
@@ -88,6 +112,7 @@ lib.callback.register('dps-shops:server:release', function(src, id)
     local rec = counterRecord(id)
     rec.netId = nil
     rec.claimedAt = nil
+    announceFree(id)
     return true
 end)
 
@@ -100,6 +125,7 @@ local function releaseAllFor(src)
         local rec = counterRecord(id)
         rec.netId = nil
         rec.claimedAt = nil
+        announceFree(id)
     end
 end
 
@@ -133,6 +159,7 @@ AddEventHandler('entityRemoved', function(entity)
         rec.claimedAt = nil
         local owner = claims:ownerOf(id)
         if owner then claims:release(id, owner) end
+        if stateOf(rec) ~= 'dead' then announceFree(id) end
     end
 end)
 
@@ -142,9 +169,21 @@ function MarkDead(id)
     rec.until_ = os.time() + Config.RespawnSeconds
     rec.netId = nil
     rec.claimedAt = nil
+    rec.reaction = nil
+    -- A respawn token, so a timer left over from an earlier death cannot announce
+    -- a counter that has since died again.
+    rec.respawn = (rec.respawn or 0) + 1
+    local token = rec.respawn
     local owner = claims:ownerOf(id)
     if owner then claims:release(id, owner) end
     TriggerClientEvent('dps-shops:client:counterState', -1, id, 'dead')
+    -- One second of slack so the claim callback's own `os.time() < rec.until_`
+    -- test has certainly passed by the time anyone acts on this.
+    SetTimeout((Config.RespawnSeconds + 1) * 1000, function()
+        local r = counters[id]
+        if not r or r.respawn ~= token or r.state ~= 'dead' then return end
+        announceFree(id)
+    end)
 end
 
 -- ---------------------------------------------------------------------------
@@ -153,7 +192,7 @@ end
 -- through the ped's statebag so every client sees the same one.
 -- ---------------------------------------------------------------------------
 
-local ReactionSeconds = 120   -- how long a clerk stays out of position
+local ReactionSeconds = (Config.Reaction and Config.Reaction.seconds) or 120
 local ThreatRateSeconds = 5   -- at most one accepted threat call per source
 local RejectRateMs = 1000     -- and a refused caller waits a second before the next
 
@@ -198,9 +237,22 @@ local function endReaction(id, incident)
     rec.until_ = os.time() + Config.Aftermath.seconds
     rec.reaction = nil
     local ent = entityOf(rec)
-    if not ent then return end
-    Entity(ent).state:set('reaction', nil, true)
-    Entity(ent).state:set('aftermath', true, true)
+    if ent then
+        Entity(ent).state:set('reaction', nil, true)
+        Entity(ent).state:set('aftermath', true, true)
+    end
+    -- The aftermath window is long (an hour by default) and stateOf only retires
+    -- the record; without this the ped would keep a stale `aftermath` bag and
+    -- never greet anyone again.
+    SetTimeout(Config.Aftermath.seconds * 1000, function()
+        local r = counters[id]
+        if not r or r.incident ~= incident or r.state ~= 'aftermath' then return end
+        if r.until_ and os.time() < r.until_ then return end
+        r.state = 'idle'
+        r.until_ = nil
+        local e = entityOf(r)
+        if e then Entity(e).state:set('aftermath', nil, true) end
+    end)
 end
 
 -- The one accept path, shared by the aim callback and the RobberyThreat export:
@@ -289,6 +341,9 @@ lib.callback.register('dps-shops:server:threat', function(src, id, reason, robbe
         return nil
     end
     threatLast[src] = now
+    if Config.Debug then
+        lib.print.info(('dps-shops: %s threat on %s by %s -> %s'):format(reason, id, tostring(src), kind))
+    end
     return kind
 end)
 
@@ -304,7 +359,7 @@ exports('RobberyThreat', function(src)
     local maxDist = Config.ThreatDistance + 2.0
     local best, bestDist
     for _, counter in ipairs(Config.Counters) do
-        if not (counter.coords.x == 0.0 and counter.coords.y == 0.0 and counter.coords.z == 0.0) then
+        if Shops.isPlaced(counter) then
             local d = #(pos - counter.coords)
             if d <= maxDist and (not bestDist or d < bestDist) then
                 best, bestDist = counter, d
@@ -340,3 +395,6 @@ end)
 local personaCount = 0
 for _ in pairs(Config.Personas) do personaCount = personaCount + 1 end
 lib.print.info(('dps-shops: %d counters, %d personas'):format(#Config.Counters, personaCount))
+for _, warning in ipairs(Shops.configWarnings(Config)) do
+    lib.print.warn('dps-shops config: ' .. warning)
+end

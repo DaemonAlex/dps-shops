@@ -9,6 +9,14 @@ function Shops.alarmDepartments(region, cfg)
     return (cfg.AlarmDepartments and cfg.AlarmDepartments[region]) or cfg.AlarmDepartments.ls
 end
 
+-- A counter with SPOT placeholder coords is not on the map yet: no points, no
+-- clerk, no threats. One test instead of five copies of the same comparison.
+function Shops.isPlaced(counter)
+    local c = counter and counter.coords
+    if not c then return false end
+    return not (c.x == 0.0 and c.y == 0.0 and c.z == 0.0)
+end
+
 function Shops.counterById(cfg, id)
     for _, c in ipairs((cfg or Config).Counters or {}) do
         if c.id == id then return c end
@@ -129,6 +137,44 @@ end
 function Shops.throttled(last, now, window)
     if not last then return false end
     return (now - last) < (window or 5)
+end
+
+-- Config sanity, printed once at boot. Pure: it takes a config table and returns
+-- a list of human-readable warnings, so it can be tested without a server.
+function Shops.configWarnings(cfg)
+    cfg = cfg or Config
+    local out = {}
+    local function add(s) out[#out + 1] = s end
+
+    if (cfg.GreetDistance or 0) > (cfg.SpawnDistance or 0) then
+        add('GreetDistance is larger than SpawnDistance: the greet ring reaches past the spawn ring')
+    end
+    if (cfg.ThreatDistance or 0) > (cfg.SpawnDistance or 0) then
+        add('ThreatDistance is larger than SpawnDistance: a threat can be aimed where no clerk spawns')
+    end
+    if (cfg.DespawnDistance or 0) < (cfg.SpawnDistance or 0) then
+        add('DespawnDistance is smaller than SpawnDistance: clerks will spawn and despawn on the spot')
+    end
+    if (cfg.ChatterSeconds or 0) < 5 then
+        add('ChatterSeconds is below 5: idle lines would overlap (the timer clamps to 5)')
+    end
+
+    for key, p in pairs(cfg.Personas or {}) do
+        if (p.aggressive or 0) > (p.aggressiveMax or 0) then
+            add(('persona %s: aggressive is above aggressiveMax'):format(tostring(key)))
+        end
+        if type(p.weapon) == 'string' and p.weapon:sub(1, 7) ~= 'WEAPON_' then
+            add(('persona %s: weapon %s is not a WEAPON_ name'):format(tostring(key), p.weapon))
+        end
+    end
+
+    for _, c in ipairs(cfg.Counters or {}) do
+        if not (cfg.Personas or {})[Shops.personaKey(c)] then
+            add(('counter %s: no persona for kind %s'):format(tostring(c.id), tostring(c.kind)))
+        end
+    end
+
+    return out
 end
 
 Shops.Claims = {}

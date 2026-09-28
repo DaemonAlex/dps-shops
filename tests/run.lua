@@ -11,7 +11,7 @@ vector3 = function(x, y, z) return { x = x, y = y, z = z } end
 joaat = function(s) return s end
 dofile('config.lua')
 dofile('shared/shops.lua')
-for _, f in ipairs({ 'tests/test_persona.lua', 'tests/test_reaction.lua', 'tests/test_claims.lua' }) do
+for _, f in ipairs({ 'tests/test_persona.lua', 'tests/test_reaction.lua', 'tests/test_claims.lua', 'tests/test_config.lua' }) do
     local fh = io.open(f, 'r')
     if fh then fh:close(); print('== ' .. f); local ok, err = pcall(dofile, f); if not ok then failed = failed + 1; print('  ERROR ' .. tostring(err)) end end
 end
