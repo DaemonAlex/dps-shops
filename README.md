@@ -91,6 +91,30 @@ A counter in the `roxwood` region always gets the `roxwood` persona instead
 of its `kind`, unless the counter sets a `persona` field of its own — that
 field, when present, always wins over both `kind` and region.
 
+## What it is for
+
+A shop with nobody behind the counter feels like a vending machine. This puts a clerk there who
+notices you, says hello in their own voice, and reacts when a gun comes out: some put their hands
+up, some fight back, and either way a silent alarm can go to the police. Robbing a shop becomes a
+scene with a person in it.
+
+## On its own, and with other scripts
+
+**On its own.** With Qbox and `ox_lib`, clerks stand at their counters, greet, chatter and react
+to threats. Everything is spoken with the game's own voices. Nothing is written on screen, which
+suits a voice-only server.
+
+**With a paid police computer (wasabi_mdt).** A threatened clerk trips a silent alarm that
+arrives as a dispatch call. Officers get the shop and the reason without anyone typing it.
+
+**With a store-robbery script.** A register or safe robbery can call the `RobberyThreat` export,
+so the clerk reacts to the robbery itself and not only to a gun. It is optional. Without it,
+clerks still react to weapons.
+
+**With a shop or inventory script.** Clerks do not sell anything themselves. They stand where
+your shop script already has its counter, so the two fit together without either knowing about
+the other.
+
 ## Requirements
 
 From `fxmanifest.lua`:
@@ -259,8 +283,8 @@ still hits the alarm on the way to fighting back.
 
 Departments are picked by the counter's `region` from `Config.
 AlarmDepartments`: `ls`, `sandy`, and `paleto` all page `police`, `bcso`, and
-`sasp`; `roxwood` pages `rpd` and `rcso` instead. A region not listed falls
-back to the `ls` list.
+`sasp`. A region not listed falls back to the `ls` list. Add a line for a region to page
+other departments.
 
 The dispatch is a `robbery` type, code `10-31`, titled `Silent alarm:
 <counter label>`, with the description `The clerk hit the alarm. Robbery in
@@ -358,3 +382,38 @@ balance.
 ## License
 
 MIT. See `LICENSE`.
+
+## Recent changes
+
+- **12 November 2026.** README: what it is for, how it works alone and with paid scripts, other DPS scripts.
+- **9 November 2026.** New counter: Paleto Hunting Store, a gun-counter clerk.
+- **1 November 2026.** Three counters added and waiting for a position: Lester Family Pharmacy, Strawberry Pharmacy and Strawberry Corner Store. A counter with no position set does not spawn a clerk.
+- **31 October 2026.** The Roxwood alarm list is gone, because the Roxwood departments no longer exist on DelPerroSands. The `roxwood` persona is still in the config for servers that use it.
+
+## Other DPS scripts
+
+All of these are made for DelPerroSands and run together on one Qbox server. Each one works on
+its own. The ones marked "pairs with" do more when both are running.
+
+| Script | What it does |
+|---|---|
+| [dps-inventory](https://github.com/DaemonAlex/dps-inventory) | The inventory: ox_inventory with equipment slots, backpacks, armour plates and a self status panel, in the DelPerroSands colours. |
+| [dps-medical](https://github.com/DaemonAlex/dps-medical) | Patient records, illness and diagnostic tests. A companion to wasabi_ambulance. Pairs with dps-inventory: symptoms and diagnoses show on the status panel. |
+| [dps-insurance](https://github.com/DaemonAlex/dps-insurance) | Ties m-Insurance into the MDT, impound, hospital and medical chart. Pairs with dps-medical. |
+| [dps-studio](https://github.com/DaemonAlex/dps-studio) | Build rooms, doors and portals in game from one panel (`/studio`), with owners and managers so staff do not have to support them. |
+| [dps-fleet](https://github.com/DaemonAlex/dps-fleet) | Vehicle browser and workshop on one panel: extras, liveries and mods for emergency vehicles. |
+| [dps-parking](https://github.com/DaemonAlex/dps-parking) | Parking with valet, impound, violations and reserved spots. |
+| [dps-vehiclepersistence](https://github.com/DaemonAlex/dps-vehiclepersistence) | Vehicles stay where they were parked. Pairs with dps-parking. |
+| [dps-towjob](https://github.com/DaemonAlex/dps-towjob) | Queue-based tow job with jg-mechanic integration. |
+| [dps-services](https://github.com/DaemonAlex/dps-services) | Request a tow and follow it live on the lb-phone and lb-tablet. Pairs with dps-towjob. |
+| [dps-autoshops](https://github.com/DaemonAlex/dps-autoshops) | Self-service repair shops when no mechanic is on duty. |
+| [dps-cityworker](https://github.com/DaemonAlex/dps-cityworker) | City infrastructure job and career. |
+| [dps-ainpcs](https://github.com/DaemonAlex/dps-ainpcs) | NPCs you can talk to, with trust, quests and intel. |
+| [dps-badpeds](https://github.com/DaemonAlex/dps-badpeds) | Police interaction with NPCs: stops, arrests, intel and jail records. |
+| [dps-gangwars](https://github.com/DaemonAlex/dps-gangwars) | Ambient gang NPCs, territory population and war reinforcements. |
+| [dps-rotations](https://github.com/DaemonAlex/dps-rotations) | Moves dealers, harvests and other spots on a fixed schedule. |
+| [dps-trains](https://github.com/DaemonAlex/dps-trains) | The train system. Pairs with dps-trains-stock, dps-traintools and dps-transitapp. |
+| [dps-transitapp](https://github.com/DaemonAlex/dps-transitapp) | Live train arrival boards on the lb-phone. |
+| [dps-faceplant](https://github.com/DaemonAlex/dps-faceplant) | City help, reports and staff tools on the lb-phone and lb-tablet. |
+| [dps-chat](https://github.com/DaemonAlex/dps-chat) | A command box for voice-only servers. No chat feed. |
+| [dps-filmmode](https://github.com/DaemonAlex/dps-filmmode) | One key hides every HUD layer and gives a smooth free camera for recording. |
