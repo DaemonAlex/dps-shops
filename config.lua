@@ -26,7 +26,6 @@ Config.AlarmDepartments = {
     ls      = { 'police', 'bcso', 'sasp' },
     sandy   = { 'police', 'bcso', 'sasp' },
     paleto  = { 'police', 'bcso', 'sasp' },
-    roxwood = { 'rpd', 'rcso' },
 }
 
 -- Personas. Speech names are the game's own contexts; the ped model's own voice
@@ -102,4 +101,12 @@ Config.Counters = {
     { id = 'sandy_247',      label = 'Sandy Shores 24/7',   kind = 'quickie',  region = 'sandy',   coords = vector3(1959.28, 3740.55, 32.34), heading = 300.0 },   -- SPOT: counter spot inside the Sandy 24/7 (shop at 1961.48, 3739.96)
     { id = 'rox_baitshop',   label = 'Roxwood Bait Shop',   kind = 'quickie',  region = 'roxwood', coords = vector3(0.0, 0.0, 0.0), heading = 0.0 },              -- SPOT: Damon /spot rox_baitshop
     { id = 'ls_binco_straw', label = 'Binco Strawberry',    kind = 'boutique', region = 'ls',      coords = vector3(75.85, -1392.61, 29.38), heading = 180.0 },    -- SPOT: confirm the counter spot
+    -- DPS 2026-11-09: Paleto hunting store (Prompt MLO at the Bayview Lodge), the huntingstore business. Damon /spot #256 "counter clerk".
+    { id = 'paleto_hunting',  label = 'Paleto Hunting Store', kind = 'guncounter', region = 'paleto', coords = vector3(-674.12, 5835.28, 17.34), heading = 53.4 },
+    -- DPS 2026-11-01 PHARMACY COUNTERS (Damon: "cool we can add those locations"). The three new
+    -- pharmacy MLOs are RSC7 binary, so their interiors carry no readable coordinates: these wait
+    -- on a /spot from Damon, same as rox_baitshop did. Persona 'pharmacist' already exists.
+    { id = 'pharm_lester',   label = 'Lester Family Pharmacy', kind = 'pharmacist', region = 'ls',    coords = vector3(0.0, 0.0, 0.0), heading = 0.0 },   -- SPOT: /spot pharm_lester  (downtown, block dt1_25)
+    { id = 'pharm_dip',      label = 'Strawberry Pharmacy',    kind = 'pharmacist', region = 'ls',    coords = vector3(0.0, 0.0, 0.0), heading = 0.0 },   -- SPOT: /spot pharm_dip     (Strawberry, block ss1_12)
+    { id = 'dip_corner_store', label = 'Strawberry Corner Store', kind = 'quickie', region = 'ls',  coords = vector3(0.0, 0.0, 0.0), heading = 0.0 },   -- SPOT: /spot dip_store    (next door to the pharmacy)
 }
