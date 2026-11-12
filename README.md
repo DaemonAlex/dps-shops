@@ -390,6 +390,10 @@ MIT. See `LICENSE`.
 - **1 November 2026.** Three counters added and waiting for a position: Lester Family Pharmacy, Strawberry Pharmacy and Strawberry Corner Store. A counter with no position set does not spawn a clerk.
 - **31 October 2026.** The Roxwood alarm list is gone, because the Roxwood departments no longer exist on DelPerroSands. The `roxwood` persona is still in the config for servers that use it.
 
+## Author
+
+Made by [DaemonAlex](https://github.com/DaemonAlex) for DelPerroSands.
+
 ## Other DPS scripts
 
 All of these are made for DelPerroSands and run together on one Qbox server. Each one works on
