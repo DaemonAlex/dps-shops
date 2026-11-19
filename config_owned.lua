@@ -76,7 +76,7 @@ Config.Owned = {
         ["alcohol_market"] = { label = "Alcohol", buyPrice = 2500, sellPrice = 1250, items = {
             ["beer"] = { label = "Beer", price = 7, min = 3, max = 14, cost = 5, export = 6, batch = 35 },
             ["vodka"] = { label = "Vodka", price = 12, min = 6, max = 24, cost = 9, export = 11, batch = 35 },
-            ["whiskey"] = { label = "Whiskey", price = 10, min = 5, max = 20, cost = 7, export = 100, batch = 35 },
+            ["whiskey"] = { label = "Whiskey", price = 10, min = 5, max = 20, cost = 7, export = 8, batch = 35 },
             ["wine"] = { label = "Wine", price = 15, min = 7, max = 30, cost = 10, export = 14, batch = 35 },
         } },
         ["ammo_weapons"] = { label = "Ammo", buyPrice = 35000, sellPrice = 17500, items = {
@@ -100,16 +100,16 @@ Config.Owned = {
             ["tablet"] = { label = "Tablet", price = 600, min = 300, max = 1200, cost = 300, export = 420, batch = 2 },
         } },
         ["food_market"] = { label = "Food", buyPrice = 5000, sellPrice = 2500, items = {
-            ["sandwich"] = { label = "Sandwich", price = 3, min = 1, max = 6, cost = 2, export = 4, batch = 35 },
-            ["snikkel_candy"] = { label = "Snikkel", price = 3, min = 1, max = 6, cost = 2, export = 4, batch = 35 },
+            ["sandwich"] = { label = "Sandwich", price = 3, min = 1, max = 6, cost = 2, export = 3, batch = 35 },
+            ["snikkel_candy"] = { label = "Snikkel", price = 3, min = 1, max = 6, cost = 2, export = 3, batch = 35 },
             ["tosti"] = { label = "Grilled Sandwich", price = 4, min = 1, max = 6, cost = 2, export = 4, batch = 35 },
-            ["twerks_candy"] = { label = "Twerks", price = 3, min = 1, max = 6, cost = 2, export = 4, batch = 35 },
+            ["twerks_candy"] = { label = "Twerks", price = 3, min = 1, max = 6, cost = 2, export = 3, batch = 35 },
         } },
         ["melee_weapons"] = { label = "Melee Weapons", buyPrice = 10000, sellPrice = 5000, items = {
-            ["weapon_bat"] = { label = "Baseball Bat", price = 500, min = 250, max = 1000, cost = 375, export = 750, batch = 2 },
-            ["weapon_crowbar"] = { label = "Crowbar", price = 500, min = 250, max = 1000, cost = 375, export = 750, batch = 2 },
+            ["weapon_bat"] = { label = "Baseball Bat", price = 500, min = 250, max = 1000, cost = 375, export = 450, batch = 2 },
+            ["weapon_crowbar"] = { label = "Crowbar", price = 500, min = 250, max = 1000, cost = 375, export = 450, batch = 2 },
             ["weapon_hammer"] = { label = "Hammer", price = 250, min = 125, max = 500, cost = 250, export = 250, batch = 2 },
-            ["weapon_knife"] = { label = "Knife", price = 250, min = 125, max = 500, cost = 188, export = 375, batch = 2 },
+            ["weapon_knife"] = { label = "Knife", price = 250, min = 125, max = 500, cost = 188, export = 225, batch = 2 },
             ["weapon_wrench"] = { label = "Wrench", price = 250, min = 125, max = 500, cost = 250, export = 250, batch = 2 },
         } },
         ["others_weapons"] = { label = "Miscellaneous", buyPrice = 5000, sellPrice = 2500, items = {

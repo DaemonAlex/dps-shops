@@ -184,6 +184,8 @@ function Owned.configWarnings(cfg)
         for item, d in pairs(c.items) do
             if d.min > d.price or d.price > d.max then w[#w + 1] = cname .. '/' .. item .. ': price outside min..max' end
             if d.cost > d.max then w[#w + 1] = cname .. '/' .. item .. ': costs the owner more than the highest shelf price' end
+            -- an unowned store sells at the shelf price with endless stock: exporting for more than that prints money
+            if d.export and d.export > d.price then w[#w + 1] = cname .. '/' .. item .. ': exports for more than its shelf price' end
         end
     end
     return w
