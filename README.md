@@ -1,9 +1,9 @@
 # dps-shops
 
-Shop clerk NPCs for a Qbox FiveM server. Clerks stand at named counters, greet
-and chat with customers using in-game voice lines, and react when threatened.
-This is layer 1 of the project: clerks only. Player-owned shops come later
-(see Roadmap).
+Shops for a Qbox FiveM server that feel lived in. Clerks stand at named counters, greet customers,
+react when threatened and, with dps-ainpcs running, talk back in their own words and remember who
+caused trouble. Players can buy a store and run it: shelves, prices, orders, a till, staff and
+upgrades. This replaces the paid lc_stores script with one DelPerroSands owns and can change.
 
 ## What the clerks do
 
@@ -98,6 +98,67 @@ notices you, says hello in their own voice, and reacts when a gun comes out: som
 up, some fight back, and either way a silent alarm can go to the police. Robbing a shop becomes a
 scene with a person in it.
 
+Owning a store makes a shop somebody's business: an owner sets prices, keeps the shelves full,
+hires friends and watches the till. AI clerks make the person behind the counter feel real: they
+answer what you actually say, know what is on the shelves, get careful around a mask or a gun,
+and remember the face of whoever robbed them.
+
+## Owned stores
+
+Every store has an **office** (where staff manage it) and one or more **counters** (where
+customers buy, through the normal ox_inventory shop window). Stores are placed in game by an
+admin, because DelPerroSands runs TStudio and other store maps whose counters are not where the
+base game's were:
+
+| Command | Who | What it does |
+|---|---|---|
+| `/shoplist` | admin | Lists every store, nearest first, placed or not, owned or for sale |
+| `/shopoffice <id>` | admin | Sets that store's office to where you stand |
+| `/shopcounter <id>` | admin | Adds a counter where you stand (run it once per till) |
+| `/shopclear <id>` | admin | Closes the store and removes its spots; the owner and stock stay |
+| `/shopnew <type> <price>` | admin | Adds a new store (`247store` or `ammunation`), then place it as above |
+
+A store opens as soon as it has an office and a counter. Until someone buys it, it sells its
+default products at list price and never runs out (`Config.Owned.UnownedFullStock`).
+
+At the office, **Store office** on the third eye opens the owner's pages:
+
+- **Shelves**: every product the store carries, with its stock and price. Set a price (each
+  product has a floor and a ceiling), put items on the shelf from your pockets, or order boxes
+  paid from the till. Orders land at once for now; delivery runs come in step 2.
+- **Till**: the balance (hidden from clerks), put money in, take money out.
+- **Staff**: hire someone standing with you by their ID, change their role, set a commission,
+  let them go. Roles are Clerk, Manager, Partner and Owner; `Config.Owned.Roles` says which role
+  may do what.
+- **Product lines**: buy or drop a line (food, drinks, alcohol, electronics, tools; weapons
+  lines for Ammu-Nation), up to the store type's limit.
+- **Upgrades**: a bigger stockroom, a bigger delivery truck, better supplier deals. Five levels each.
+- **Rename** and **Sell** (owner only: the sell price plus whatever is in the till).
+
+Every sale, order, deposit and staff change is written to `dps_shop_ledger`. Prices, products,
+store types and roles came over from the lc_stores config, so nothing changed for players.
+
+## AI clerks
+
+With `dps-ainpcs` running, every placed clerk can be talked to (**Talk to** on the third eye).
+The model, the voice, memory, trust and rate limits are all dps-ainpcs's own settings; this
+resource only says who each kind of clerk is (`Config.AIClerks.Kinds`) and what is true right now:
+
+- **What the store sells**, at what price and how many are left, and whether it has an owner.
+- **What just happened**: a clerk robbed within the hour is shaken and does not trust strangers.
+- **Who is in front of them**: a mask or a gun in hand makes the clerk careful and short.
+
+Clerks also **keep an eye on people** without being asked. Someone with a gun out, a mask on, or
+browsing for a long time without buying gets watched: the clerk turns to look at them and says
+something. These remarks are the game's own voice lines, so they cost nothing.
+
+**Clerks remember trouble.** A robbery or a weapon pulled on a clerk is saved (`dps_shop_incidents`,
+kept 60 days). It is a slow burn: the first time that person comes back, the clerk only has a
+hunch and says so casually, in their own words ("you look familiar", "have you been in here
+before?"). Repeat offenders get short answers and a suggestion to shop elsewhere. Word gets
+around: clerks of the same kind elsewhere in the city have "heard something" about repeat
+trouble-makers.
+
 ## On its own, and with other scripts
 
 **On its own.** With Qbox and `ox_lib`, clerks stand at their counters, greet, chatter and react
@@ -111,9 +172,17 @@ arrives as a dispatch call. Officers get the shop and the reason without anyone 
 so the clerk reacts to the robbery itself and not only to a gun. It is optional. Without it,
 clerks still react to weapons.
 
-**With a shop or inventory script.** Clerks do not sell anything themselves. They stand where
-your shop script already has its counter, so the two fit together without either knowing about
-the other.
+**With ox_inventory.** Owned stores sell through ox_inventory's own shop window (cash or card),
+and every sale passes through a hook that takes the stock off the shelf and puts the money in the
+store's till.
+
+**With dps-ainpcs (and dps-voice).** Clerks become talking NPCs with live facts about their shop,
+and their lines are spoken aloud when dps-voice runs. Without dps-ainpcs, clerks still greet,
+watch and react with the game's own voice lines; there is just no conversation.
+
+**Instead of lc_stores.** Owned stores do what the paid lc_stores script did, with the same
+stores, prices and products. Until the switch (step 4), `Config.Owned.Enabled` can stay on: a
+store only opens where an admin has placed it.
 
 ## Requirements
 
@@ -121,15 +190,22 @@ From `fxmanifest.lua`:
 
 - `ox_lib`
 - `qbx_core`
+- `oxmysql`
+- `ox_inventory` (owned store counters)
+- `ox_target` (the office and counter spots)
 - `wasabi_mdt` (for the silent alarm dispatch — see Police dispatch)
 
 Optional:
 
+- `dps-ainpcs` for talking clerks (and `dps-voice` for spoken lines).
 - A store-robbery script that calls the `RobberyThreat` export before
   sending its own dispatch (see Store-robbery integration). Nothing breaks
   if none is installed; register robberies simply never threaten a clerk.
 
-No database tables and no items are used by this resource.
+Tables (created on first start): `dps_shop_stores` (each store's owner, name, till, stock, staff and
+upgrades), `dps_shop_spots` (where admins placed offices and counters), `dps_shop_ledger` (every sale
+and change), `dps_shop_incidents` (who robbed or threatened a clerk). No items of its own: stores
+sell the items already in ox_inventory.
 
 ## Install
 
@@ -370,20 +446,33 @@ This loads `config.lua` and `shared/shops.lua` directly under stock Lua
   `TaskCombatPed` is active. Every client watching (not owning) the clerk
   pays nothing extra — they just see the networked ped and its statebag.
   All of this stops the moment the reaction ends or the clerk dies.
+- **Owned stores:** nothing runs on a timer except a save every 30 seconds for stores that sold
+  something. Sales are counted in memory; the office pages are built only when someone opens them.
+- **AI clerks:** the model is called only when someone talks to a clerk, and dps-ainpcs's rate
+  limits cap that. The live facts come from tables already in memory. The watcher starts only when
+  a player walks within 25 m of a counter and checks once a second; the server is asked about the
+  player's history once a minute at most.
 
 ## Roadmap
 
-Layer 2 is player-owned shops: an owner buys or leases a configured
-counter, stock arrives by delivery rather than existing for free, the owner
-chooses their clerk's stance (or keeps the default persona behavior from
-this layer), and the till is a society account rather than a private
-balance.
+- **Step 1, owned stores:** done (see Owned stores).
+- **Step 2, restock and export runs:** orders arrive by truck, driven by the owner, staff or a hired
+  driver; the truck upgrade decides how much fits. Replaces the instant order.
+- **Step 3, AI clerks:** done (see AI clerks). Next: shoplifting the clerk can catch, and clerks
+  who push a thief out, chase them with a bat or pull a gun, depending on the persona.
+- **Step 4, the switch:** placed stores take over from lc_stores, which is then removed.
 
 ## License
 
 MIT. See `LICENSE`.
 
 ## Recent changes
+
+- **19 November 2026.** Owned stores (step 1): buy a store, shelves and prices, orders, a till,
+  staff and roles, upgrades and product lines, all from the store office. Stores are placed in game
+  with admin commands. AI clerks (step 3): clerks talk through dps-ainpcs with live facts about
+  their shop, keep an eye on armed, masked and loitering customers, and remember who robbed them,
+  starting with a casual hunch. Tests: 143 checks.
 
 - **12 November 2026.** README: what it is for, how it works alone and with paid scripts, other DPS scripts.
 - **9 November 2026.** New counter: Paleto Hunting Store, a gun-counter clerk.
