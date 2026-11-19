@@ -26,6 +26,26 @@ function RecordShopIncident(counter, src, reason)
         { counter.id, reason, cid, name })
 end
 
+-- What a clerk half-remembers someone doing, by incident kind (the sentence reads "the one who ... this store").
+local DID = {
+    robbery = 'held up',
+    fuel_theft = 'drove off without paying for fuel at',
+    fuel_driveoff = 'ripped the hose off a pump at',
+}
+
+-- Trouble outside the door (dps-fuel: fuel theft, a ripped pump hose). The nearest counter's clerk remembers it.
+exports('RecordIncidentNear', function(coords, src, reason, radius)
+    if type(reason) ~= 'string' or not DID[reason] then return false end
+    local best, bd
+    for _, counter in ipairs(Config.Counters) do
+        local d = #(counter.coords - vector3(coords.x, coords.y, coords.z))
+        if d <= (radius or 60.0) and (not bd or d < bd) then best, bd = counter, d end
+    end
+    if not best then return false end
+    RecordShopIncident(best, src, reason)
+    return true
+end)
+
 function ShopCustomerBought(src) lastBought[src] = os.time() end
 AddEventHandler('playerDropped', function() lastBought[source] = nil end)
 
@@ -84,7 +104,7 @@ exports('ClerkContext', function(npcId, src)
                 text = text .. ('\nThis person looks familiar. You think they might be the one who %s this store %s, but you are not sure '
                     .. 'and you do not accuse anyone over a hunch. Play it cool: say something casual in your own words, in the spirit of "you look familiar" or "have you been in here before?" (never those exact words), then keep an eye on them. '
                     .. 'Only if they act shady or admit it do you get firm.'):format(
-                    last.kind == 'robbery' and 'held up' or 'pulled a weapon in', ago(last.at))
+                    DID[last.kind] or 'pulled a weapon in', ago(last.at))
             else
                 text = text .. ('\nYou are fairly sure this is the person who has caused trouble here before (%d times, last one %s). '
                     .. 'You stay calm but you do not want them in the store: short answers, and you suggest they shop somewhere else.'):format(
