@@ -82,3 +82,21 @@ check('office + counter opens', Owned.isPlaced({ office = vec3(1, 2, 3), counter
 local all = Owned.allStores({ store_x = { type = '247store', buyPrice = 1000, sellPrice = 500 }, market_1 = { type = 'x' } })
 eq('admin-added store joins the list', #all, #O.Stores + 1)
 eq('config store keeps its definition', Owned.storeById('market_1').type, '247store')
+
+-- delivery runs
+local s2 = { upgrades = { truck = 0, relationship = 0 } }
+local wdef = Owned.itemDef('water_bottle', Owned.blankState(s1).categories)
+eq('run carries one box at level 0', Owned.runCapacity(s1, s2, wdef), wdef.batch)
+check('truck upgrade carries more', Owned.runCapacity(s1, { upgrades = { truck = 2 } }, wdef) > wdef.batch)
+eq('import cost at list', Owned.importCost(s1, s2, wdef, 10), wdef.cost * 10)
+check('supplier deal lowers cost', Owned.importCost(s1, { upgrades = { relationship = 5 } }, wdef, 100) < wdef.cost * 100)
+eq('export value', Owned.exportValue(wdef, 3), wdef.export * 3)
+eq('level 0 truck', Owned.truckModel(s1, s2), 'speedo')
+check('bigger truck at level 5', Owned.truckModel(s1, { upgrades = { truck = 5 } }) ~= 'speedo')
+local pts = { vec3(0, 100, 0), vec3(0, 1000, 0), vec3(0, 9000, 0) }
+local first = function() return 1 end
+eq('pickup in range', Owned.pickPoint(pts, vec3(0, 0, 0), first, 400, 2500).y, 1000)
+eq('nearest when none fit', Owned.pickPoint(pts, vec3(0, 0, 0), first, 20000, 30000).y, 100)
+eq('plate', Owned.plate('SHOP', 7), 'SHOP0007')
+check('lc pickups came over', #O.Pickups > 50, #O.Pickups)
+check('lc export points came over', #O.ExportPoints > 10, #O.ExportPoints)

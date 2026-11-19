@@ -58,7 +58,7 @@ function Owned.blankState(store, cfg)
     local cats = {}
     for _, c in ipairs(t and t.defaultCategories or {}) do cats[c] = true end
     return { owner = nil, name = nil, balance = 0, upgrades = { stock = 0, truck = 0, relationship = 0 },
-             categories = cats, stock = {}, staff = {} }
+             categories = cats, stock = {}, staff = {}, jobs = {} }
 end
 
 function Owned.roleOf(state, citizenid)
@@ -188,3 +188,46 @@ function Owned.configWarnings(cfg)
     end
     return w
 end
+
+-- ---------- delivery runs (step 2) ----------
+-- How much of one product a run carries: the product's box size plus the truck upgrade's extra room.
+function Owned.runCapacity(store, state, def, cfg)
+    local t = Owned.typeOf(store, cfg)
+    local lvl = (state.upgrades and state.upgrades.truck) or 0
+    local up = t and t.upgrades.truck
+    return (def and def.batch or 0) + ((up and up.levels[lvl + 1]) or 0)
+end
+
+-- Better supplier deals: the relationship upgrade's level value is a percent off the import cost.
+function Owned.importCost(store, state, def, amount, cfg)
+    local t = Owned.typeOf(store, cfg)
+    local lvl = (state.upgrades and state.upgrades.relationship) or 0
+    local up = t and t.upgrades.relationship
+    local off = (up and up.levels[lvl + 1]) or 0
+    return math.floor(def.cost * amount * (100 - off) / 100 + 0.5)
+end
+
+function Owned.exportValue(def, amount) return def.export * amount end
+
+-- The truck that comes with the truck upgrade level.
+function Owned.truckModel(store, state, cfg)
+    local t = Owned.typeOf(store, cfg)
+    local lvl = (state.upgrades and state.upgrades.truck) or 0
+    local list = t and t.trucks or {}
+    return list[math.min(lvl + 1, #list)] or 'speedo'
+end
+
+-- A point between min and max metres from `from`, picked with rand(n) -> 1..n; the nearest if none fit.
+function Owned.pickPoint(points, from, rand, min, max)
+    local ok, nearest, nd = {}, nil, nil
+    for _, p in ipairs(points) do
+        local dx, dy = p.x - from.x, p.y - from.y
+        local d = math.sqrt(dx * dx + dy * dy)
+        if d >= min and d <= max then ok[#ok + 1] = p end
+        if not nd or d < nd then nearest, nd = p, d end
+    end
+    if #ok > 0 then return ok[rand(#ok)] end
+    return nearest
+end
+
+function Owned.plate(prefix, n) return ('%s%04d'):format(prefix, n % 10000) end

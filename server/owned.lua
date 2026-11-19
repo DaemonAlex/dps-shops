@@ -17,7 +17,7 @@ local function storeOf(id)
     for _, s in ipairs(list) do
         if s.id == id then
             local sp = spots[id] or {}
-            return setmetatable({ office = sp.office, counters = sp.counters }, { __index = s })
+            return setmetatable({ office = sp.office, counters = sp.counters, garage = sp.garage }, { __index = s })
         end
     end
     return nil
@@ -28,7 +28,7 @@ local function log(...) if Config.Debug then print('[dps-shops:owned]', ...) end
 
 -- ---------- saving ----------
 local function encode(state)
-    return json.encode({ upgrades = state.upgrades, categories = state.categories, stock = state.stock, staff = state.staff })
+    return json.encode({ upgrades = state.upgrades, categories = state.categories, stock = state.stock, staff = state.staff, jobs = state.jobs })
 end
 
 local function save(id)
@@ -150,13 +150,22 @@ local function view(store, st, pd, role)
         maxStaff = t.maxStaff, slotsLeft = Owned.categorySlotsLeft(store, st),
     }
     if Owned.allowed(role, 'showBalance') then v.balance = st.balance end
+    v.instant = O.InstantRestock
+    v.hasGarage = store.garage ~= nil
+    v.jobs = {}
+    for _, j in ipairs(st.jobs or {}) do
+        local def = Owned.itemDef(j.item, st.categories)
+        v.jobs[#v.jobs + 1] = { id = j.id, label = def and def.label or j.item, amount = j.amount, reward = j.reward, taken = j.takenBy ~= nil }
+    end
     for cat in pairs(st.categories) do
         local c = O.Categories[cat]
         for item, def in pairs(c.items) do
             local s = st.stock[item]
             v.products[#v.products + 1] = { item = item, label = def.label, line = c.label,
                 amount = s and s.amount or 0, price = s and s.price or def.price,
-                min = def.min, max = def.max, cost = def.cost, batch = def.batch }
+                min = def.min, max = def.max, cost = def.cost, batch = def.batch,
+                run = Owned.runCapacity(store, st, def), runCost = Owned.importCost(store, st, def, Owned.runCapacity(store, st, def)),
+                export = def.export }
         end
     end
     table.sort(v.products, function(a, b) return a.label < b.label end)
@@ -386,11 +395,14 @@ CreateThread(function()
         id VARCHAR(32) PRIMARY KEY, type VARCHAR(32) NULL, buy_price INT NULL, sell_price INT NULL,
         office LONGTEXT NULL, counters LONGTEXT NULL,
         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)]])
+    MySQL.query.await('ALTER TABLE dps_shop_spots ADD COLUMN IF NOT EXISTS garage LONGTEXT NULL')
     for _, r in ipairs(MySQL.query.await('SELECT * FROM dps_shop_spots') or {}) do
         local o = r.office and json.decode(r.office)
+        local g = r.garage and json.decode(r.garage)
         local cs = {}
         for _, c in ipairs(r.counters and json.decode(r.counters) or {}) do cs[#cs + 1] = vector3(c.x, c.y, c.z) end
-        spots[r.id] = { office = o and vector3(o.x, o.y, o.z) or nil, counters = cs }
+        spots[r.id] = { office = o and vector3(o.x, o.y, o.z) or nil, counters = cs,
+                        garage = g and vector4(g.x, g.y, g.z, g.w) or nil }
         if r.type then extra[r.id] = { type = r.type, buyPrice = r.buy_price, sellPrice = r.sell_price } end
     end
     refreshList()
@@ -408,6 +420,7 @@ CreateThread(function()
             st.categories = d.categories or st.categories
             st.stock = d.stock or {}
             st.staff = d.staff or {}
+            st.jobs = d.jobs or {}
         end
         stores[store.id] = st
         registerShop(store)
@@ -428,11 +441,12 @@ local function saveSpot(id)
     local cs = {}
     for _, c in ipairs(sp.counters or {}) do cs[#cs + 1] = { x = c.x, y = c.y, z = c.z } end
     local e = extra[id]
-    MySQL.prepare.await('INSERT INTO dps_shop_spots (id, type, buy_price, sell_price, office, counters) VALUES (?, ?, ?, ?, ?, ?) ' ..
+    MySQL.prepare.await('INSERT INTO dps_shop_spots (id, type, buy_price, sell_price, office, counters, garage) VALUES (?, ?, ?, ?, ?, ?, ?) ' ..
         'ON DUPLICATE KEY UPDATE type = VALUES(type), buy_price = VALUES(buy_price), sell_price = VALUES(sell_price), ' ..
-        'office = VALUES(office), counters = VALUES(counters)',
+        'office = VALUES(office), counters = VALUES(counters), garage = VALUES(garage)',
         { id, e and e.type, e and e.buyPrice, e and e.sellPrice,
-          sp.office and json.encode({ x = sp.office.x, y = sp.office.y, z = sp.office.z }) or nil, json.encode(cs) })
+          sp.office and json.encode({ x = sp.office.x, y = sp.office.y, z = sp.office.z }) or nil, json.encode(cs),
+          sp.garage and json.encode({ x = sp.garage.x, y = sp.garage.y, z = sp.garage.z, w = sp.garage.w }) or nil })
 end
 
 local function placed(id)
@@ -469,6 +483,18 @@ function(src, a)
     table.insert(spots[a.id].counters, here(src))
     saveSpot(a.id); placed(a.id)
     tell(src, ('%s: counter %d added.'):format(a.id, #spots[a.id].counters) .. (Owned.isPlaced(storeOf(a.id)) and ' Store is open.' or ' Now set the office with /shopoffice.'), 'success')
+end)
+
+lib.addCommand('shopgarage', { help = 'Owned shops: set where this store\'s delivery truck parks (stand there, facing the way out)',
+    params = { { name = 'id', type = 'string', help = 'store id' } }, restricted = 'group.admin' },
+function(src, a)
+    if not storeOf(a.id) then return tell(src, 'No store ' .. a.id .. '. /shoplist shows them.', 'error') end
+    local ped = GetPlayerPed(src)
+    local c = here(src)
+    spots[a.id] = spots[a.id] or { counters = {} }
+    spots[a.id].garage = vector4(c.x, c.y, c.z, math.floor(GetEntityHeading(ped) * 10 + 0.5) / 10)
+    saveSpot(a.id)
+    tell(src, a.id .. ': truck spot set. Delivery runs start and end here.', 'success')
 end)
 
 lib.addCommand('shopclear', { help = 'Owned shops: remove a store\'s office and counters (it closes; owner and stock stay)',
@@ -533,3 +559,9 @@ function OwnedStoreNear(coords, radius)
     end
     return { id = best.id, name = label(best, st), owned = st.owner ~= nil, items = items }
 end
+
+-- For server/runs.lua (same resource). Not an export: other resources go through the callbacks.
+OwnedInternal = {
+    stores = stores, storeOf = storeOf, gate = gate, save = save, ledger = ledger,
+    registerShop = registerShop, player = player, fullName = fullName, tell = tell,
+}

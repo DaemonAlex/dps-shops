@@ -115,6 +115,7 @@ base game's were:
 | `/shoplist` | admin | Lists every store, nearest first, placed or not, owned or for sale |
 | `/shopoffice <id>` | admin | Sets that store's office to where you stand |
 | `/shopcounter <id>` | admin | Adds a counter where you stand (run it once per till) |
+| `/shopgarage <id>` | admin | Sets where the store's delivery truck parks (stand there facing the way out) |
 | `/shopclear <id>` | admin | Closes the store and removes its spots; the owner and stock stay |
 | `/shopnew <type> <price>` | admin | Adds a new store (`247store` or `ammunation`), then place it as above |
 
@@ -124,8 +125,8 @@ default products at list price and never runs out (`Config.Owned.UnownedFullStoc
 At the office, **Store office** on the third eye opens the owner's pages:
 
 - **Shelves**: every product the store carries, with its stock and price. Set a price (each
-  product has a floor and a ceiling), put items on the shelf from your pockets, or order boxes
-  paid from the till. Orders land at once for now; delivery runs come in step 2.
+  product has a floor and a ceiling), put items on the shelf from your pockets, or restock by
+  truck (see Delivery runs).
 - **Till**: the balance (hidden from clerks), put money in, take money out.
 - **Staff**: hire someone standing with you by their ID, change their role, set a commission,
   let them go. Roles are Clerk, Manager, Partner and Owner; `Config.Owned.Roles` says which role
@@ -134,6 +135,25 @@ At the office, **Store office** on the third eye opens the owner's pages:
   lines for Ammu-Nation), up to the store type's limit.
 - **Upgrades**: a bigger stockroom, a bigger delivery truck, better supplier deals. Five levels each.
 - **Rename** and **Sell** (owner only: the sell price plus whatever is in the till).
+
+### Delivery runs
+
+Stock comes by truck. From a product on the Shelves page:
+
+- **Drive a delivery run**: the goods are paid from the till, the store's truck appears at its truck
+  spot, and a route leads to a pickup somewhere in the city. Load up, drive back, unload: the
+  goods go on the shelves. The truck upgrade decides how much one run carries (and which truck you
+  get), the supplier upgrade takes a percent off the price.
+- **Post it on the delivery board**: the same run, paid up front (goods plus a reward you set), for
+  any player to do. Anyone at the office can open **Delivery jobs**, take one, and is paid the reward
+  when the goods are unloaded. A job nobody finishes goes back on the board; one nobody took can be
+  taken down for the money back.
+- **Export some**: load stock from the shelves and drive it to a buyer; the export price goes in
+  the till when the truck is back.
+
+The server checks every stop itself: the player must be in that store's truck, at that place. A
+run has 30 minutes; a wrecked or lost truck, giving up (`/shoprunquit`) or running out of time
+loses the load. `Config.Owned.InstantRestock = true` brings back step 1's instant orders.
 
 Every sale, order, deposit and staff change is written to `dps_shop_ledger`. Prices, products,
 store types and roles came over from the lc_stores config, so nothing changed for players.
@@ -447,7 +467,8 @@ This loads `config.lua` and `shared/shops.lua` directly under stock Lua
   pays nothing extra — they just see the networked ped and its statebag.
   All of this stops the moment the reaction ends or the clerk dies.
 - **Owned stores:** nothing runs on a timer except a save every 30 seconds for stores that sold
-  something. Sales are counted in memory; the office pages are built only when someone opens them.
+  something, and a once-a-minute check that calls off delivery runs that ran out of time. The run
+  prompt only loops for a player who is on a run. Sales are counted in memory; the office pages are built only when someone opens them.
 - **AI clerks:** the model is called only when someone talks to a clerk, and dps-ainpcs's rate
   limits cap that. The live facts come from tables already in memory. The watcher starts only when
   a player walks within 25 m of a counter and checks once a second; the server is asked about the
@@ -456,8 +477,7 @@ This loads `config.lua` and `shared/shops.lua` directly under stock Lua
 ## Roadmap
 
 - **Step 1, owned stores:** done (see Owned stores).
-- **Step 2, restock and export runs:** orders arrive by truck, driven by the owner, staff or a hired
-  driver; the truck upgrade decides how much fits. Replaces the instant order.
+- **Step 2, restock and export runs:** done (see Delivery runs).
 - **Step 3, AI clerks:** done (see AI clerks). Next: shoplifting the clerk can catch, and clerks
   who push a thief out, chase them with a bat or pull a gun, depending on the persona.
 - **Step 4, the switch:** placed stores take over from lc_stores, which is then removed.
@@ -468,6 +488,8 @@ MIT. See `LICENSE`.
 
 ## Recent changes
 
+- **19 November 2026.** Delivery runs (step 2): stock comes by truck from a pickup, exports go by
+  truck to a buyer, and stores can post runs on a delivery board for any player to drive for pay.
 - **19 November 2026.** Owned stores (step 1): buy a store, shelves and prices, orders, a till,
   staff and roles, upgrades and product lines, all from the store office. Stores are placed in game
   with admin commands. AI clerks (step 3): clerks talk through dps-ainpcs with live facts about

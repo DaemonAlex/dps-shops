@@ -36,6 +36,32 @@ local function productsMenu(v)
                         local r = lib.inputDialog(p.label, { { type = 'number', label = 'How many', min = 1, default = 1 } })
                         if r then act(v.id, 'storeProductFromInventory', { item = p.item, amount = r[1] }, function() openOffice(v.id) end) end
                     end }
+                local function run(cb, ...)
+                    local ok, msg = lib.callback.await(cb, false, v.id, ...)
+                    notify(ok, msg)
+                end
+                if not Config.Owned.InstantRestock then
+                    sub[#sub + 1] = { title = 'Drive a delivery run', icon = 'truck',
+                        description = ('%d %s for %s from the till · you drive'):format(p.run, p.label, money(p.runCost)),
+                        disabled = v.role < Config.Owned.Roles.startImportJob or not v.hasGarage,
+                        onSelect = function() run('dps-shops:run:import', p.item) end }
+                    sub[#sub + 1] = { title = 'Post it on the delivery board', icon = 'clipboard-list',
+                        description = ('%d %s for %s, plus what you pay the driver'):format(p.run, p.label, money(p.runCost)),
+                        disabled = v.role < Config.Owned.Roles.createJob or not v.hasGarage,
+                        onSelect = function()
+                            local r = lib.inputDialog('Driver pay', { { type = 'number', label = 'Reward for the driver ($)',
+                                min = Config.Owned.Runs.boardMinReward, default = Config.Owned.Runs.boardMinReward } })
+                            if r then run('dps-shops:run:post', p.item, r[1]) end
+                        end }
+                    sub[#sub + 1] = { title = 'Export some', icon = 'right-from-bracket',
+                        description = ('Sell to a buyer at %s each · up to %d per truck'):format(money(p.export), p.run),
+                        disabled = v.role < Config.Owned.Roles.startExportJob or not v.hasGarage or p.amount < 1,
+                        onSelect = function()
+                            local r = lib.inputDialog('Export ' .. p.label, { { type = 'number', label = 'How many',
+                                min = 1, max = math.min(p.amount, p.run), default = math.min(p.amount, p.run) } })
+                            if r then run('dps-shops:run:export', p.item, r[1]) end
+                        end }
+                end
                 if Config.Owned.InstantRestock then
                     sub[#sub + 1] = { title = 'Order boxes', description = ('%d per box · %s each to the store'):format(p.batch, money(p.cost)),
                         disabled = v.role < Config.Owned.Roles.startImportJob, onSelect = function()
@@ -125,6 +151,38 @@ local function bankMenu(v)
     lib.showContext('dps_own_bank')
 end
 
+local function boardMenu(id, back)
+    local list = lib.callback.await('dps-shops:run:board', false, id)
+    if not list then return notify(false, 'Come to the office.') end
+    local opts = {}
+    if #list == 0 then opts[1] = { title = 'No deliveries wanted right now', icon = 'clipboard' } end
+    for _, j in ipairs(list) do
+        opts[#opts + 1] = { title = ('%d %s'):format(j.amount, j.label), icon = j.taken and 'truck-moving' or 'truck',
+            description = j.taken and 'A driver is on it' or ('Pays %s · take the store truck to the pickup and back'):format(money(j.reward)),
+            disabled = j.taken, onSelect = function()
+                local ok, msg = lib.callback.await('dps-shops:run:take', false, id, j.id)
+                notify(ok, msg)
+            end }
+    end
+    lib.registerContext({ id = 'dps_own_board', title = 'Delivery jobs', menu = back, options = opts })
+    lib.showContext('dps_own_board')
+end
+
+local function myJobsMenu(v)
+    local opts = {}
+    if #v.jobs == 0 then opts[1] = { title = 'Nothing posted', description = 'Post jobs from a product on the Shelves page', icon = 'clipboard' } end
+    for _, j in ipairs(v.jobs) do
+        opts[#opts + 1] = { title = ('%d %s'):format(j.amount, j.label), icon = j.taken and 'truck-moving' or 'clipboard-list',
+            description = j.taken and 'A driver is on it' or ('Offering %s · select to take it down (money back)'):format(money(j.reward)),
+            disabled = j.taken or v.role < Config.Owned.Roles.deleteJob, onSelect = function()
+                local ok, msg = lib.callback.await('dps-shops:run:unpost', false, v.id, j.id)
+                notify(ok, msg); openOffice(v.id)
+            end }
+    end
+    lib.registerContext({ id = 'dps_own_myjobs', title = 'Posted deliveries', menu = 'dps_own_office', options = opts })
+    lib.showContext('dps_own_myjobs')
+end
+
 openOffice = function(id)
     local v, err = lib.callback.await('dps-shops:owned:view', false, id)
     if not v then return notify(false, err) end
@@ -146,6 +204,8 @@ openOffice = function(id)
         { title = 'Till', description = v.balance and money(v.balance) or nil, icon = 'cash-register', onSelect = function() bankMenu(v) end },
         { title = 'Staff', description = ('%d of %d'):format(#v.staff, v.maxStaff), icon = 'users', onSelect = function() staffMenu(v) end },
         { title = 'Product lines', icon = 'tags', onSelect = function() linesMenu(v) end },
+        { title = 'Posted deliveries', description = v.hasGarage and (#v.jobs .. ' on the board') or 'No truck spot yet (admin: /shopgarage)',
+          icon = 'clipboard-list', onSelect = function() myJobsMenu(v) end },
         { title = 'Upgrades', icon = 'arrow-up-right-dots', onSelect = function() upgradesMenu(v) end },
         { title = 'Rename the store', icon = 'pen', disabled = v.role < Config.Owned.Roles.renameStore, onSelect = function()
             local r = lib.inputDialog('Store name', { { type = 'input', label = 'Name', default = v.name, min = 3, max = 30 } })
@@ -174,6 +234,8 @@ local function buildZones()
         zones[#zones + 1] = exports.ox_target:addSphereZone({ coords = s.office, radius = 0.8, debug = Config.Debug, options = {
             { name = 'dps_own_office_' .. s.id, icon = 'fa-solid fa-store', label = 'Store office', distance = 2.0,
               onSelect = function() openOffice(s.id) end },
+            { name = 'dps_own_board_' .. s.id, icon = 'fa-solid fa-truck', label = 'Delivery jobs', distance = 2.0,
+              onSelect = function() boardMenu(s.id) end },
         } })
         for i, c in ipairs(s.counters) do
             zones[#zones + 1] = exports.ox_target:addSphereZone({ coords = c, radius = 0.7, debug = Config.Debug, options = {
