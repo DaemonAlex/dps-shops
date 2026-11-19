@@ -125,6 +125,7 @@ end
 exports.ox_inventory:registerHook('buyItem', function(p)
     local id = type(p.shopType) == 'string' and p.shopType:match('^' .. SHOP_PREFIX .. '(.+)$')
     if not id then return true end
+    if ShopCustomerBought then ShopCustomerBought(p.source) end   -- a paying customer is not a loiterer (server/ai.lua)
     local st = stores[id]
     if not st or not st.owner then return true end      -- unowned: the city's stock, the money leaves the game
     local s = st.stock[p.itemName]
@@ -510,3 +511,25 @@ function(src)
     table.sort(rows, function(a, b) return a.d < b.d end)
     TriggerClientEvent('dps-shops:owned:list', src, rows)
 end)
+
+-- For the AI clerks (server/ai.lua): the placed store nearest these coords, as plain facts.
+function OwnedStoreNear(coords, radius)
+    local best, bestD
+    for _, def in ipairs(list) do
+        local store = storeOf(def.id)
+        if Owned.isPlaced(store) then
+            for _, c in ipairs(store.counters) do
+                local d = #(coords - c)
+                if d <= radius and (not bestD or d < bestD) then best, bestD = store, d end
+            end
+        end
+    end
+    if not best then return nil end
+    local st = stores[best.id]
+    local items = {}
+    for _, it in ipairs(Owned.customerInventory(best, st)) do
+        local def = Owned.itemDef(it.name, st.owner and st.categories or nil)
+        items[#items + 1] = { label = def and def.label or it.name, price = it.price, amount = it.count }
+    end
+    return { id = best.id, name = label(best, st), owned = st.owner ~= nil, items = items }
+end

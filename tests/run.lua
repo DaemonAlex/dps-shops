@@ -15,7 +15,8 @@ vec3 = function(x, y, z) return { x = x, y = y, z = z } end
 vec4 = function(x, y, z, w) return { x = x, y = y, z = z, w = w } end
 dofile('config_owned.lua')
 dofile('shared/owned.lua')
-for _, f in ipairs({ 'tests/test_persona.lua', 'tests/test_reaction.lua', 'tests/test_claims.lua', 'tests/test_config.lua', 'tests/test_owned.lua' }) do
+dofile('shared/ai.lua')
+for _, f in ipairs({ 'tests/test_persona.lua', 'tests/test_reaction.lua', 'tests/test_claims.lua', 'tests/test_config.lua', 'tests/test_owned.lua', 'tests/test_ai.lua' }) do
     local fh = io.open(f, 'r')
     if fh then fh:close(); print('== ' .. f); local ok, err = pcall(dofile, f); if not ok then failed = failed + 1; print('  ERROR ' .. tostring(err)) end end
 end

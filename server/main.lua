@@ -282,6 +282,7 @@ local function tryThreat(counter, src, reason, robbers, gun, armed)
     if not ent then return nil end
 
     if reason == 'robbery' then rec.lastRobberyAt = now end
+    if RecordShopIncident then RecordShopIncident(counter, src, reason) end   -- clerks remember who did it (server/ai.lua)
 
     local persona = Shops.persona(counter, Config)
     local kind = Shops.rollReaction(persona, {
@@ -396,6 +397,10 @@ end)
 exports('GetCounterState', function(id)
     return stateOf(counters[id])
 end)
+
+-- For server/ai.lua (same resource): a counter's state, and which client runs its clerk.
+function ShopsCounterState(id) return stateOf(counters[id]) end
+function ShopsClerkOwner(id) return claims:ownerOf(id) end
 
 local personaCount = 0
 for _ in pairs(Config.Personas) do personaCount = personaCount + 1 end
